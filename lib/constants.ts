@@ -13,8 +13,11 @@ export const DEFAULT_PLANNING: Record<number, string[]> = {
   5: ['Corentin'],                               // Dimanche
 };
 
-// Mot de passe admin (à changer pour la prod, ou utiliser Supabase Auth)
-export const ADMIN_PASSWORD = 'admin';
+export interface EmployeeProfile {
+  name: string;              // prénom (identifiant)
+  last_name: string | null;
+  phone: string | null;
+}
 
 export type DayType = 'work' | 'conge' | 'absence';
 

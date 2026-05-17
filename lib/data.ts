@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 import { formatLocalKey, getDayDate } from './utils';
-import { DayData, WeekData, DEFAULT_PLANNING } from './constants';
+import { DayData, WeekData, DEFAULT_PLANNING, EmployeeProfile } from './constants';
 
 // ============================================================
 // EMPLOYEES
@@ -12,17 +12,49 @@ export async function fetchEmployees(): Promise<string[]> {
   return (data || []).map(r => r.name as string);
 }
 
-export async function addEmployee(name: string): Promise<void> {
-  const { error } = await supabase.from('employees').insert({ name });
+export async function fetchEmployeeProfiles(): Promise<EmployeeProfile[]> {
+  const { data, error } = await supabase
+    .from('employees')
+    .select('name, last_name, phone')
+    .order('created_at');
+  if (error) throw error;
+  return (data || []) as EmployeeProfile[];
+}
+
+export async function fetchEmployeeProfile(name: string): Promise<EmployeeProfile | null> {
+  const { data, error } = await supabase
+    .from('employees')
+    .select('name, last_name, phone')
+    .eq('name', name)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as EmployeeProfile) || null;
+}
+
+export async function addEmployee(profile: EmployeeProfile): Promise<void> {
+  const { error } = await supabase.from('employees').insert({
+    name: profile.name,
+    last_name: profile.last_name || null,
+    phone: profile.phone || null,
+  });
+  if (error) throw error;
+}
+
+export async function updateEmployeeProfile(profile: EmployeeProfile): Promise<void> {
+  const { error } = await supabase
+    .from('employees')
+    .update({
+      last_name: profile.last_name || null,
+      phone: profile.phone || null,
+    })
+    .eq('name', profile.name);
   if (error) throw error;
 }
 
 export async function deleteEmployee(name: string): Promise<void> {
-  // Cascade : on supprime aussi ses pointages et on le retire du planning
   const { error: e1 } = await supabase.from('time_entries').delete().eq('employee', name);
   if (e1) throw e1;
 
-  // Retirer le nom de tous les plannings
   const { data: plannings } = await supabase.from('planning').select('*');
   if (plannings) {
     for (const p of plannings) {
@@ -38,10 +70,32 @@ export async function deleteEmployee(name: string): Promise<void> {
 }
 
 // ============================================================
-// TIME ENTRIES — stockés par (employee, date)
-// Une ligne time_entries par plage horaire, ou une ligne marker
-// pour congé/absence (start_time et end_time null).
-// On agrège côté client en WeekData[dayIndex].
+// APP SETTINGS (mot de passe admin, etc.)
+// ============================================================
+
+export async function fetchAdminPassword(): Promise<string> {
+  const { data, error } = await supabase
+    .from('app_settings')
+    .select('value')
+    .eq('key', 'admin_password')
+    .maybeSingle();
+  if (error) throw error;
+  // Si rien en base, retourne le défaut "admin"
+  return (data?.value as string) || 'admin';
+}
+
+export async function updateAdminPassword(newPassword: string): Promise<void> {
+  const { error } = await supabase
+    .from('app_settings')
+    .upsert(
+      { key: 'admin_password', value: newPassword, updated_at: new Date().toISOString() },
+      { onConflict: 'key' }
+    );
+  if (error) throw error;
+}
+
+// ============================================================
+// TIME ENTRIES
 // ============================================================
 
 interface RawEntry {
@@ -72,7 +126,6 @@ export async function fetchWeekData(employee: string, weekKey: string): Promise<
     const dayIndex = computeDayIndex(weekKey, row.work_date);
     if (dayIndex < 0 || dayIndex > 5) return;
     if (!week[dayIndex]) week[dayIndex] = { type: row.type, entries: [] };
-    // Si une absence/congé existe sur ce jour, c'est le type qui prime
     if (row.type !== 'work') {
       week[dayIndex] = { type: row.type, entries: [] };
     } else if (week[dayIndex].type === 'work') {
@@ -120,11 +173,9 @@ function computeDayIndex(weekKey: string, dateStr: string): number {
   return diff;
 }
 
-// Remplace toute la journée par newDay (on supprime + on réinsère)
 export async function saveDayData(employee: string, weekKey: string, dayIndex: number, newDay: DayData): Promise<void> {
   const workDate = formatLocalKey(getDayDate(weekKey, dayIndex));
 
-  // Supprimer toutes les entrées existantes pour ce jour
   const { error: delError } = await supabase
     .from('time_entries')
     .delete()
@@ -144,7 +195,6 @@ export async function saveDayData(employee: string, weekKey: string, dayIndex: n
     return;
   }
 
-  // type 'work' : insérer toutes les entries (ne rien insérer si tableau vide)
   if (!newDay.entries || newDay.entries.length === 0) return;
   const rows = newDay.entries.map(e => ({
     employee,
@@ -207,7 +257,6 @@ export async function deletePlanningWeek(weekKey: string): Promise<void> {
   if (error) throw error;
 }
 
-// Renvoie le planning effectif : custom s'il existe, sinon DEFAULT filtré
 export function getEffectivePlanning(customPlanning: WeekPlanning | null, allEmployees: string[]): WeekPlanning {
   if (customPlanning) return customPlanning;
   const result: WeekPlanning = {};

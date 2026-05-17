@@ -3,16 +3,19 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Clock, LogIn, LogOut, Edit3, Download, Users, Settings, ChevronLeft,
-  Calendar, AlertCircle, Plane, Check, X, Plus, CalendarCheck, Zap, UserPlus, Loader2
+  Calendar, AlertCircle, Plane, Check, X, Plus, CalendarCheck, Zap, UserPlus, Loader2,
+  Phone, User, Key, Save,
 } from 'lucide-react';
-import { DAYS, DEFAULT_EMPLOYEES, ADMIN_PASSWORD, DayData, WeekData } from '@/lib/constants';
+import { DAYS, DEFAULT_EMPLOYEES, DayData, WeekData, EmployeeProfile } from '@/lib/constants';
 import {
-  parseLocalDate, formatLocalKey, getWeekKey, getDayDate, shiftWeek,
+  parseLocalDate, getWeekKey, getDayDate, shiftWeek,
   formatDate, formatDateShort, getTodayDayIndex,
   calculateDayHours, calculateOvertime, calculateWeekTotal,
 } from '@/lib/utils';
 import {
-  fetchEmployees, addEmployee as apiAddEmployee, deleteEmployee as apiDeleteEmployee,
+  fetchEmployees, fetchEmployeeProfiles, addEmployee as apiAddEmployee,
+  updateEmployeeProfile, deleteEmployee as apiDeleteEmployee,
+  fetchAdminPassword, updateAdminPassword,
   fetchWeekData, fetchAllWeekData, saveDayData,
   fetchPlanning, savePlanningDay, savePlanningWeek, deletePlanningWeek,
   getEffectivePlanning, WeekPlanning,
@@ -46,7 +49,7 @@ function useEmployees() {
 // VUE EMPLOYÉ
 // ============================================================
 
-function EmployeeView({ employee, employees, onBack }: { employee: string; employees: string[]; onBack: () => void }) {
+function EmployeeView({ employee, onBack }: { employee: string; onBack: () => void }) {
   const [now, setNow] = useState(new Date());
   const [editMode, setEditMode] = useState(false);
   const [editWeekKey, setEditWeekKey] = useState(getWeekKey(new Date()));
@@ -64,10 +67,8 @@ function EmployeeView({ employee, employees, onBack }: { employee: string; emplo
 
   const reload = useCallback(async () => {
     setLoading(true);
-    try {
-      const data = await fetchWeekData(employee, todayWeekKey);
-      setWeekData(data);
-    } catch (e) { console.error(e); }
+    try { setWeekData(await fetchWeekData(employee, todayWeekKey)); }
+    catch (e) { console.error(e); }
     setLoading(false);
   }, [employee, todayWeekKey]);
 
@@ -80,11 +81,10 @@ function EmployeeView({ employee, employees, onBack }: { employee: string; emplo
 
   const handleClockIn = async () => {
     const time = now.toTimeString().slice(0, 5);
-    const newDay: DayData = {
+    await saveDayData(employee, todayWeekKey, todayDayIndex, {
       type: 'work',
       entries: [...(currentDay.entries || []), { start: time, end: null }],
-    };
-    await saveDayData(employee, todayWeekKey, todayDayIndex, newDay);
+    });
     await reload();
   };
 
@@ -192,9 +192,8 @@ function EditWeekView({ employee, weekKey, setWeekKey, onBack }: { employee: str
 
   const reload = useCallback(async () => {
     setLoading(true);
-    try {
-      setWeekData(await fetchWeekData(employee, weekKey));
-    } catch (e) { console.error(e); }
+    try { setWeekData(await fetchWeekData(employee, weekKey)); }
+    catch (e) { console.error(e); }
     setLoading(false);
   }, [employee, weekKey]);
 
@@ -311,6 +310,166 @@ function EditWeekView({ employee, weekKey, setWeekKey, onBack }: { employee: str
 }
 
 // ============================================================
+// MODAL FICHE SALARIÉ
+// ============================================================
+
+function EmployeeFormModal({ profile, onSave, onCancel, isNew }: {
+  profile: EmployeeProfile;
+  onSave: (p: EmployeeProfile) => Promise<void>;
+  onCancel: () => void;
+  isNew: boolean;
+}) {
+  const [name, setName] = useState(profile.name);
+  const [lastName, setLastName] = useState(profile.last_name || '');
+  const [phone, setPhone] = useState(profile.phone || '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async () => {
+    setError(null);
+    if (!name.trim()) { setError('Le prénom est obligatoire'); return; }
+    setSaving(true);
+    try {
+      await onSave({ name: name.trim(), last_name: lastName.trim() || null, phone: phone.trim() || null });
+    } catch (e: any) {
+      setError(e?.message || 'Erreur lors de l\'enregistrement');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50" onClick={onCancel}>
+      <div className="bg-slate-800 border border-white/20 rounded-2xl p-6 max-w-md w-full" onClick={e => e.stopPropagation()}>
+        <h3 className="text-white text-xl font-bold mb-4 flex items-center gap-2">
+          <User className="w-5 h-5" />
+          {isNew ? 'Nouveau salarié' : `Fiche de ${profile.name}`}
+        </h3>
+
+        <div className="space-y-3 mb-4">
+          <div>
+            <label className="text-purple-200 text-sm flex items-center gap-1 mb-1">
+              <User className="w-3 h-3" /> Prénom <span className="text-red-300">*</span>
+            </label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              disabled={!isNew}
+              placeholder="ex: Benoit"
+              className="w-full px-3 py-2 bg-white/10 text-white rounded-lg border border-white/20 focus:outline-none focus:border-purple-400 disabled:opacity-50"
+            />
+            {!isNew && <p className="text-xs text-purple-400 mt-1">Le prénom sert d&apos;identifiant et ne peut pas être modifié.</p>}
+          </div>
+
+          <div>
+            <label className="text-purple-200 text-sm flex items-center gap-1 mb-1">
+              <User className="w-3 h-3" /> Nom de famille
+            </label>
+            <input
+              type="text"
+              value={lastName}
+              onChange={(e) => setLastName(e.target.value)}
+              placeholder="ex: Dupont"
+              className="w-full px-3 py-2 bg-white/10 text-white rounded-lg border border-white/20 focus:outline-none focus:border-purple-400"
+            />
+          </div>
+
+          <div>
+            <label className="text-purple-200 text-sm flex items-center gap-1 mb-1">
+              <Phone className="w-3 h-3" /> Téléphone
+            </label>
+            <input
+              type="tel"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="ex: 06 12 34 56 78"
+              className="w-full px-3 py-2 bg-white/10 text-white rounded-lg border border-white/20 focus:outline-none focus:border-purple-400"
+            />
+          </div>
+        </div>
+
+        {error && <div className="bg-red-500/20 border border-red-400/40 text-red-200 text-sm p-2 rounded mb-3">{error}</div>}
+
+        <div className="flex gap-2 justify-end">
+          <button onClick={onCancel} disabled={saving} className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg">
+            Annuler
+          </button>
+          <button onClick={handleSubmit} disabled={saving} className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg flex items-center gap-2 disabled:opacity-50">
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            {isNew ? 'Créer' : 'Enregistrer'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// MODAL CHANGEMENT MOT DE PASSE ADMIN
+// ============================================================
+
+function PasswordChangeModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const [currentPwd, setCurrentPwd] = useState('');
+  const [newPwd, setNewPwd] = useState('');
+  const [confirmPwd, setConfirmPwd] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async () => {
+    setError(null);
+    if (!newPwd) { setError('Nouveau mot de passe vide'); return; }
+    if (newPwd !== confirmPwd) { setError('Les deux mots de passe ne correspondent pas'); return; }
+    if (newPwd.length < 4) { setError('Le mot de passe doit faire au moins 4 caractères'); return; }
+
+    setSaving(true);
+    try {
+      const stored = await fetchAdminPassword();
+      if (stored !== currentPwd) { setError('Mot de passe actuel incorrect'); setSaving(false); return; }
+      await updateAdminPassword(newPwd);
+      onSaved();
+    } catch (e: any) {
+      setError(e?.message || 'Erreur');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50" onClick={onClose}>
+      <div className="bg-slate-800 border border-white/20 rounded-2xl p-6 max-w-md w-full" onClick={e => e.stopPropagation()}>
+        <h3 className="text-white text-xl font-bold mb-4 flex items-center gap-2">
+          <Key className="w-5 h-5" /> Changer le mot de passe admin
+        </h3>
+
+        <div className="space-y-3 mb-4">
+          <div>
+            <label className="text-purple-200 text-sm mb-1 block">Mot de passe actuel</label>
+            <input type="password" value={currentPwd} onChange={(e) => setCurrentPwd(e.target.value)} className="w-full px-3 py-2 bg-white/10 text-white rounded-lg border border-white/20 focus:outline-none focus:border-purple-400" />
+          </div>
+          <div>
+            <label className="text-purple-200 text-sm mb-1 block">Nouveau mot de passe</label>
+            <input type="password" value={newPwd} onChange={(e) => setNewPwd(e.target.value)} className="w-full px-3 py-2 bg-white/10 text-white rounded-lg border border-white/20 focus:outline-none focus:border-purple-400" />
+          </div>
+          <div>
+            <label className="text-purple-200 text-sm mb-1 block">Confirmer le nouveau mot de passe</label>
+            <input type="password" value={confirmPwd} onChange={(e) => setConfirmPwd(e.target.value)} className="w-full px-3 py-2 bg-white/10 text-white rounded-lg border border-white/20 focus:outline-none focus:border-purple-400" />
+          </div>
+        </div>
+
+        {error && <div className="bg-red-500/20 border border-red-400/40 text-red-200 text-sm p-2 rounded mb-3">{error}</div>}
+
+        <div className="flex gap-2 justify-end">
+          <button onClick={onClose} disabled={saving} className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg">Annuler</button>
+          <button onClick={handleSubmit} disabled={saving} className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg flex items-center gap-2 disabled:opacity-50">
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            Enregistrer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
 // VUE PLANNING
 // ============================================================
 
@@ -318,14 +477,12 @@ function PlanningView({ employees, onEmployeesChange, onBack }: { employees: str
   const [weekKey, setWeekKey] = useState(getWeekKey(new Date()));
   const [customPlanning, setCustomPlanning] = useState<WeekPlanning | null>(null);
   const [loading, setLoading] = useState(true);
-  const [showAddEmployee, setShowAddEmployee] = useState(false);
-  const [newEmployeeName, setNewEmployeeName] = useState('');
+  const [showAddForm, setShowAddForm] = useState(false);
 
   const reload = useCallback(async () => {
     setLoading(true);
-    try {
-      setCustomPlanning(await fetchPlanning(weekKey));
-    } catch (e) { console.error(e); }
+    try { setCustomPlanning(await fetchPlanning(weekKey)); }
+    catch (e) { console.error(e); }
     setLoading(false);
   }, [weekKey]);
 
@@ -373,20 +530,13 @@ function PlanningView({ employees, onEmployeesChange, onBack }: { employees: str
     setCustomPlanning(null);
   };
 
-  const handleAddEmployee = async () => {
-    const name = newEmployeeName.trim();
-    if (!name || employees.includes(name)) return;
-    await apiAddEmployee(name);
+  const handleCreateEmployee = async (profile: EmployeeProfile) => {
+    if (employees.includes(profile.name)) {
+      throw new Error('Un salarié avec ce prénom existe déjà');
+    }
+    await apiAddEmployee(profile);
     await onEmployeesChange();
-    setNewEmployeeName('');
-    setShowAddEmployee(false);
-  };
-
-  const handleRemoveEmployee = async (name: string) => {
-    if (!confirm(`Supprimer ${name} et toutes ses données ?`)) return;
-    await apiDeleteEmployee(name);
-    await onEmployeesChange();
-    await reload();
+    setShowAddForm(false);
   };
 
   return (
@@ -436,12 +586,11 @@ function PlanningView({ employees, onEmployeesChange, onBack }: { employees: str
                         <div className="text-xs text-purple-400 font-normal">{formatDateShort(getDayDate(weekKey, i))}</div>
                       </th>
                     ))}
-                    <th className="p-2 w-10"></th>
                   </tr>
                 </thead>
                 <tbody>
                   {employees.map(emp => (
-                    <tr key={emp} className="border-b border-white/5 group">
+                    <tr key={emp} className="border-b border-white/5">
                       <td className="p-2 text-white font-semibold">{emp}</td>
                       {DAYS.map((_, i) => {
                         const checked = effective[i]?.includes(emp) || false;
@@ -455,11 +604,6 @@ function PlanningView({ employees, onEmployeesChange, onBack }: { employees: str
                           </td>
                         );
                       })}
-                      <td className="p-2">
-                        <button onClick={() => handleRemoveEmployee(emp)} className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 text-red-300 hover:text-red-100 hover:bg-red-500/20 rounded-lg" title={`Supprimer ${emp}`}>
-                          <X className="w-4 h-4" />
-                        </button>
-                      </td>
                     </tr>
                   ))}
                   <tr>
@@ -476,7 +620,6 @@ function PlanningView({ employees, onEmployeesChange, onBack }: { employees: str
                         </td>
                       );
                     })}
-                    <td></td>
                   </tr>
                 </tbody>
               </table>
@@ -484,41 +627,30 @@ function PlanningView({ employees, onEmployeesChange, onBack }: { employees: str
           )}
 
           <div className="mt-4 pt-4 border-t border-white/10">
-            {showAddEmployee ? (
-              <div className="flex gap-2 flex-wrap">
-                <input
-                  type="text"
-                  value={newEmployeeName}
-                  onChange={(e) => setNewEmployeeName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleAddEmployee();
-                    if (e.key === 'Escape') { setShowAddEmployee(false); setNewEmployeeName(''); }
-                  }}
-                  placeholder="Prénom du nouveau salarié"
-                  autoFocus
-                  className="flex-1 min-w-[200px] px-4 py-2 bg-white/10 text-white rounded-lg border border-white/20 focus:outline-none focus:border-purple-400"
-                />
-                <button onClick={handleAddEmployee} className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg flex items-center gap-2">
-                  <Check className="w-4 h-4" /> Ajouter
-                </button>
-                <button onClick={() => { setShowAddEmployee(false); setNewEmployeeName(''); }} className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg">
-                  Annuler
-                </button>
-              </div>
-            ) : (
-              <button onClick={() => setShowAddEmployee(true)} className="w-full py-2 border-2 border-dashed border-white/20 hover:border-purple-400 text-purple-200 hover:text-white rounded-lg flex items-center justify-center gap-2 text-sm">
-                <UserPlus className="w-4 h-4" /> Ajouter un salarié
-              </button>
-            )}
+            <button onClick={() => setShowAddForm(true)} className="w-full py-2 border-2 border-dashed border-white/20 hover:border-purple-400 text-purple-200 hover:text-white rounded-lg flex items-center justify-center gap-2 text-sm">
+              <UserPlus className="w-4 h-4" /> Ajouter un salarié
+            </button>
+            <p className="text-xs text-purple-400 mt-2 text-center">
+              Les fiches détaillées (nom, téléphone) se gèrent dans l&apos;espace administrateur.
+            </p>
           </div>
         </div>
+
+        {showAddForm && (
+          <EmployeeFormModal
+            profile={{ name: '', last_name: null, phone: null }}
+            onSave={handleCreateEmployee}
+            onCancel={() => setShowAddForm(false)}
+            isNew
+          />
+        )}
       </div>
     </div>
   );
 }
 
 // ============================================================
-// VUE POINTAGE DU JOUR (groupé)
+// VUE POINTAGE DU JOUR
 // ============================================================
 
 function TodayView({ employees, onBack }: { employees: string[]; onBack: () => void }) {
@@ -699,44 +831,77 @@ function TodayView({ employees, onBack }: { employees: string[]; onBack: () => v
 }
 
 // ============================================================
-// VUE ADMIN
+// VUE ADMIN avec fiches détaillées et changement de mot de passe
 // ============================================================
 
 function AdminView({ employees, onEmployeesChange, onBack }: { employees: string[]; onEmployeesChange: () => Promise<void>; onBack: () => void }) {
   const [adminPwd, setAdminPwd] = useState('');
   const [unlocked, setUnlocked] = useState(false);
+  const [pwdError, setPwdError] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
   const [selectedWeek, setSelectedWeek] = useState(getWeekKey(new Date()));
   const [exportStart, setExportStart] = useState(getWeekKey(new Date()));
   const [exportEnd, setExportEnd] = useState(getWeekKey(new Date()));
-  const [newEmployeeName, setNewEmployeeName] = useState('');
   const [allWeekData, setAllWeekData] = useState<Record<string, WeekData>>({});
   const [loading, setLoading] = useState(false);
+
+  // Fiches salariés
+  const [profiles, setProfiles] = useState<EmployeeProfile[]>([]);
+  const [editingProfile, setEditingProfile] = useState<EmployeeProfile | null>(null);
+  const [addingProfile, setAddingProfile] = useState(false);
+  const [showPwdModal, setShowPwdModal] = useState(false);
+  const [pwdChangedNotif, setPwdChangedNotif] = useState(false);
+
+  const reloadProfiles = useCallback(async () => {
+    try { setProfiles(await fetchEmployeeProfiles()); }
+    catch (e) { console.error(e); }
+  }, []);
 
   const reload = useCallback(async () => {
     if (!unlocked) return;
     setLoading(true);
-    try {
-      setAllWeekData(await fetchAllWeekData(selectedWeek, employees));
-    } catch (e) { console.error(e); }
+    try { setAllWeekData(await fetchAllWeekData(selectedWeek, employees)); }
+    catch (e) { console.error(e); }
     setLoading(false);
   }, [unlocked, selectedWeek, employees]);
 
   useEffect(() => { reload(); }, [reload]);
+  useEffect(() => { if (unlocked) reloadProfiles(); }, [unlocked, reloadProfiles]);
 
-  const handleUnlock = () => { if (adminPwd === ADMIN_PASSWORD || adminPwd === '') setUnlocked(true); };
+  const handleUnlock = async () => {
+    setChecking(true);
+    setPwdError(null);
+    try {
+      const stored = await fetchAdminPassword();
+      if (stored === adminPwd) {
+        setUnlocked(true);
+      } else {
+        setPwdError('Mot de passe incorrect');
+      }
+    } catch (e) {
+      setPwdError('Erreur de connexion');
+    }
+    setChecking(false);
+  };
 
-  const handleAddEmployee = async () => {
-    const name = newEmployeeName.trim();
-    if (!name || employees.includes(name)) return;
-    await apiAddEmployee(name);
+  const handleSaveProfile = async (profile: EmployeeProfile) => {
+    if (addingProfile) {
+      if (employees.includes(profile.name)) throw new Error('Un salarié avec ce prénom existe déjà');
+      await apiAddEmployee(profile);
+    } else {
+      await updateEmployeeProfile(profile);
+    }
     await onEmployeesChange();
-    setNewEmployeeName('');
+    await reloadProfiles();
+    setEditingProfile(null);
+    setAddingProfile(false);
   };
 
   const handleRemoveEmployee = async (name: string) => {
     if (!confirm(`Supprimer ${name} et toutes ses données ?`)) return;
     await apiDeleteEmployee(name);
     await onEmployeesChange();
+    await reloadProfiles();
     await reload();
   };
 
@@ -754,11 +919,12 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
       cursorKey = shiftWeek(cursorKey, 1);
     }
 
-    const lines = ['Salarié;Semaine du;au;Mardi;Mercredi;Jeudi;Vendredi;Samedi;Dimanche;Total;Normales;HS +10%;HS +20%;HS +50%'];
+    const lines = ['Salarié;Nom;Téléphone;Semaine du;au;Mardi;Mercredi;Jeudi;Vendredi;Samedi;Dimanche;Total;Normales;HS +10%;HS +20%;HS +50%'];
 
     for (const wk of weeks) {
       const data = await fetchAllWeekData(wk, employees);
       employees.forEach(emp => {
+        const profile = profiles.find(p => p.name === emp);
         const weekData = data[emp] || {};
         const dayCells = DAYS.map((_, i) => {
           const d = weekData[i];
@@ -769,7 +935,15 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
         });
         const total = calculateWeekTotal(weekData);
         const ot = calculateOvertime(total);
-        lines.push([emp, formatDate(parseLocalDate(wk)), formatDate(getDayDate(wk, 5)), ...dayCells, total.toFixed(2), ot.normal.toFixed(2), ot.at10.toFixed(2), ot.at20.toFixed(2), ot.at50.toFixed(2)].join(';'));
+        lines.push([
+          emp,
+          profile?.last_name || '',
+          profile?.phone || '',
+          formatDate(parseLocalDate(wk)),
+          formatDate(getDayDate(wk, 5)),
+          ...dayCells,
+          total.toFixed(2), ot.normal.toFixed(2), ot.at10.toFixed(2), ot.at20.toFixed(2), ot.at50.toFixed(2)
+        ].join(';'));
       });
     }
 
@@ -790,12 +964,24 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
           <div className="text-center mb-6">
             <Settings className="w-12 h-12 text-purple-300 mx-auto mb-3" />
             <h2 className="text-2xl font-bold text-white">Espace Admin</h2>
-            <p className="text-purple-200 text-sm mt-2">Mot de passe</p>
+            <p className="text-purple-200 text-sm mt-2">Saisis le mot de passe</p>
           </div>
-          <input type="password" value={adminPwd} onChange={(e) => setAdminPwd(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleUnlock()} placeholder="Mot de passe" className="w-full px-4 py-3 bg-white/10 text-white rounded-lg border border-white/20 focus:outline-none focus:border-purple-400 mb-3" />
+          <input
+            type="password"
+            value={adminPwd}
+            onChange={(e) => setAdminPwd(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleUnlock()}
+            placeholder="Mot de passe"
+            autoFocus
+            className="w-full px-4 py-3 bg-white/10 text-white rounded-lg border border-white/20 focus:outline-none focus:border-purple-400 mb-3"
+          />
+          {pwdError && <div className="text-red-300 text-sm mb-3 text-center">{pwdError}</div>}
           <div className="flex gap-2">
             <button onClick={onBack} className="flex-1 py-3 bg-white/10 hover:bg-white/20 text-white rounded-lg">Annuler</button>
-            <button onClick={handleUnlock} className="flex-1 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-semibold">Entrer</button>
+            <button onClick={handleUnlock} disabled={checking} className="flex-1 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-semibold flex items-center justify-center gap-2 disabled:opacity-50">
+              {checking ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+              Entrer
+            </button>
           </div>
         </div>
       </div>
@@ -810,31 +996,63 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
             <ChevronLeft className="w-5 h-5" /> Retour
           </button>
           <h1 className="text-2xl font-bold text-white">Administration</h1>
-          <div className="w-20" />
+          <button onClick={() => setShowPwdModal(true)} className="flex items-center gap-2 px-3 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg text-sm">
+            <Key className="w-4 h-4" /> Mot de passe
+          </button>
         </div>
 
+        {pwdChangedNotif && (
+          <div className="bg-green-500/20 border border-green-400/40 text-green-200 p-3 rounded-lg mb-4 flex items-center gap-2">
+            <Check className="w-5 h-5" /> Mot de passe administrateur mis à jour.
+          </div>
+        )}
+
+        {/* FICHES SALARIÉS */}
         <div className="bg-white/5 backdrop-blur rounded-2xl p-5 mb-6">
-          <h2 className="text-white font-semibold mb-3 flex items-center gap-2">
-            <Users className="w-5 h-5" /> Salariés
-          </h2>
-          <div className="flex gap-2 mb-3">
-            <input type="text" value={newEmployeeName} onChange={(e) => setNewEmployeeName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleAddEmployee()} placeholder="Nom du nouveau salarié" className="flex-1 px-4 py-2 bg-white/10 text-white rounded-lg border border-white/20 focus:outline-none focus:border-purple-400" />
-            <button onClick={handleAddEmployee} className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg flex items-center gap-2">
-              <Plus className="w-4 h-4" /> Ajouter
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+            <h2 className="text-white font-semibold flex items-center gap-2">
+              <Users className="w-5 h-5" /> Fiches salariés
+            </h2>
+            <button onClick={() => setAddingProfile(true)} className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg flex items-center gap-2 text-sm">
+              <UserPlus className="w-4 h-4" /> Ajouter un salarié
             </button>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {employees.map(emp => (
-              <div key={emp} className="bg-white/10 px-3 py-1.5 rounded-lg flex items-center gap-2">
-                <span className="text-white">{emp}</span>
-                <button onClick={() => handleRemoveEmployee(emp)} className="text-red-300 hover:text-red-100">
-                  <X className="w-4 h-4" />
-                </button>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {profiles.map(profile => (
+              <div key={profile.name} className="bg-white/5 rounded-xl p-4 border border-white/10 hover:border-white/20 transition">
+                <div className="flex items-start justify-between gap-2 mb-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-white font-semibold text-lg">
+                      {profile.name} {profile.last_name && <span className="text-purple-200 font-normal">{profile.last_name}</span>}
+                    </div>
+                    {profile.phone ? (
+                      <a href={`tel:${profile.phone.replace(/\s/g, '')}`} className="text-purple-300 text-sm hover:text-white flex items-center gap-1 mt-1">
+                        <Phone className="w-3 h-3" /> {profile.phone}
+                      </a>
+                    ) : (
+                      <div className="text-purple-400 text-sm italic mt-1">Pas de téléphone</div>
+                    )}
+                  </div>
+                  <div className="flex gap-1">
+                    <button onClick={() => setEditingProfile(profile)} className="p-2 text-purple-300 hover:text-white hover:bg-white/10 rounded-lg" title="Modifier la fiche">
+                      <Edit3 className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => handleRemoveEmployee(profile.name)} className="p-2 text-red-300 hover:text-red-100 hover:bg-red-500/20 rounded-lg" title="Supprimer">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
               </div>
             ))}
           </div>
+
+          {profiles.length === 0 && (
+            <div className="text-center text-purple-300 py-6 text-sm italic">Aucun salarié enregistré.</div>
+          )}
         </div>
 
+        {/* RÉCAP SEMAINE */}
         <div className="bg-white/5 backdrop-blur rounded-2xl p-5 mb-6">
           <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
             <button onClick={() => changeWeek(-1)} className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg">← Préc.</button>
@@ -915,6 +1133,7 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
           )}
         </div>
 
+        {/* EXPORT */}
         <div className="bg-white/5 backdrop-blur rounded-2xl p-5 mb-6">
           <h2 className="text-white font-semibold mb-3 flex items-center gap-2">
             <Download className="w-5 h-5" /> Export CSV
@@ -930,7 +1149,7 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
             </div>
             <div className="flex items-end">
               <button onClick={exportCSV} className="w-full py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-semibold flex items-center justify-center gap-2">
-                <Download className="w-4 h-4" /> Télécharger CSV
+                <Download className="w-4 h-4" /> Télécharger
               </button>
             </div>
           </div>
@@ -947,6 +1166,34 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
             <li>• Semaine du mardi au dimanche</li>
           </ul>
         </div>
+
+        {/* MODALES */}
+        {editingProfile && (
+          <EmployeeFormModal
+            profile={editingProfile}
+            onSave={handleSaveProfile}
+            onCancel={() => setEditingProfile(null)}
+            isNew={false}
+          />
+        )}
+        {addingProfile && (
+          <EmployeeFormModal
+            profile={{ name: '', last_name: null, phone: null }}
+            onSave={handleSaveProfile}
+            onCancel={() => setAddingProfile(false)}
+            isNew
+          />
+        )}
+        {showPwdModal && (
+          <PasswordChangeModal
+            onClose={() => setShowPwdModal(false)}
+            onSaved={() => {
+              setShowPwdModal(false);
+              setPwdChangedNotif(true);
+              setTimeout(() => setPwdChangedNotif(false), 4000);
+            }}
+          />
+        )}
       </div>
     </div>
   );
@@ -1042,7 +1289,7 @@ export default function App() {
   }
 
   if (view === 'employee' && selectedEmployee) {
-    return <EmployeeView employee={selectedEmployee} employees={employees} onBack={() => { setView('selection'); setSelectedEmployee(null); }} />;
+    return <EmployeeView employee={selectedEmployee} onBack={() => { setView('selection'); setSelectedEmployee(null); }} />;
   }
   if (view === 'admin') return <AdminView employees={employees} onEmployeesChange={reload} onBack={() => setView('selection')} />;
   if (view === 'today') return <TodayView employees={employees} onBack={() => setView('selection')} />;
