@@ -915,6 +915,9 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
   // Cellule jour×salarié actuellement ouverte pour modification (congé/absence/effacer)
   const [openCell, setOpenCell] = useState<{ employee: string; dayIndex: number } | null>(null);
 
+  // Édition des heures d'un salarié spécifique depuis l'admin
+  const [editingEmployeeHours, setEditingEmployeeHours] = useState<{ employee: string; weekKey: string } | null>(null);
+
   // Modifie le type d'un jour pour un salarié donné depuis le récap admin
   const setDayTypeForEmployee = async (employee: string, dayIndex: number, type: 'conge' | 'absence' | 'clear') => {
     try {
@@ -1071,6 +1074,18 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
     );
   }
 
+  // Édition des heures d'un salarié depuis l'admin : on réutilise EditWeekView
+  if (editingEmployeeHours) {
+    return (
+      <EditWeekView
+        employee={editingEmployeeHours.employee}
+        weekKey={editingEmployeeHours.weekKey}
+        setWeekKey={(k) => setEditingEmployeeHours({ ...editingEmployeeHours, weekKey: k })}
+        onBack={() => { setEditingEmployeeHours(null); reload(); }}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-4">
       <div className="max-w-6xl mx-auto">
@@ -1152,14 +1167,22 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
                 </div>
 
                 <div className="mt-6 mb-2 text-xs text-purple-400 italic">
-                  💡 Clique sur une case pour ajouter un congé ou une absence.
+                  💡 Clique sur une case pour ajouter un congé ou une absence, ou sur &quot;Modifier les heures&quot; pour saisir/corriger les pointages détaillés.
                 </div>
                 <div className="space-y-4">
                   {visibleEmployees.map(emp => {
                     const weekData = allWeekData[emp] || {};
                     return (
                       <div key={emp} className="bg-white/5 rounded-lg p-3">
-                        <div className="text-white font-semibold mb-2">{emp}</div>
+                        <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                          <div className="text-white font-semibold">{emp}</div>
+                          <button
+                            onClick={() => setEditingEmployeeHours({ employee: emp, weekKey: selectedWeek })}
+                            className="text-xs px-3 py-1.5 bg-purple-600/30 hover:bg-purple-600/50 text-purple-100 rounded-lg flex items-center gap-1.5 transition"
+                          >
+                            <Edit3 className="w-3 h-3" /> Modifier les heures
+                          </button>
+                        </div>
                         <div className="grid grid-cols-6 gap-2">
                           {DAYS.map((dayName, i) => {
                             const d = weekData[i];
