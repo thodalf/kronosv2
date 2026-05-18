@@ -201,7 +201,15 @@ function EditWeekView({ employee, weekKey, setWeekKey, onBack }: { employee: str
 
   const getDayData = (dayIndex: number): DayData => weekData[dayIndex] || { type: 'work', entries: [] };
 
-  const updateDay = async (dayIndex: number, newDay: DayData) => {
+  // Mise à jour locale + sauvegarde silencieuse (pas de reload → pas de perte de focus)
+  const updateDayLocalAndSave = async (dayIndex: number, newDay: DayData) => {
+    setWeekData(prev => ({ ...prev, [dayIndex]: newDay }));
+    try { await saveDayData(employee, weekKey, dayIndex, newDay); }
+    catch (e) { console.error(e); }
+  };
+
+  // Pour les changements de type (work/conge/absence) qui invalident la structure : on relit
+  const updateDayAndReload = async (dayIndex: number, newDay: DayData) => {
     await saveDayData(employee, weekKey, dayIndex, newDay);
     await reload();
   };
@@ -210,22 +218,32 @@ function EditWeekView({ employee, weekKey, setWeekKey, onBack }: { employee: str
 
   const addEntry = (dayIndex: number) => {
     const day = getDayData(dayIndex);
-    updateDay(dayIndex, { type: 'work', entries: [...(day.entries || []), { start: '09:00', end: '17:00' }] });
+    updateDayLocalAndSave(dayIndex, { type: 'work', entries: [...(day.entries || []), { start: '09:00', end: '17:00' }] });
   };
 
-  const updateEntry = (dayIndex: number, entryIndex: number, field: 'start' | 'end', value: string) => {
+  // Frappe : MAJ locale seulement, pas de save (sinon perte de focus à chaque caractère)
+  const updateEntryLocal = (dayIndex: number, entryIndex: number, field: 'start' | 'end', value: string) => {
+    setWeekData(prev => {
+      const day = prev[dayIndex] || { type: 'work', entries: [] };
+      const entries = [...day.entries];
+      entries[entryIndex] = { ...entries[entryIndex], [field]: value };
+      return { ...prev, [dayIndex]: { ...day, entries } };
+    });
+  };
+
+  // Persistance différée déclenchée quand le champ perd le focus
+  const persistDay = async (dayIndex: number) => {
     const day = getDayData(dayIndex);
-    const entries = [...day.entries];
-    entries[entryIndex] = { ...entries[entryIndex], [field]: value };
-    updateDay(dayIndex, { type: 'work', entries });
+    try { await saveDayData(employee, weekKey, dayIndex, day); }
+    catch (e) { console.error(e); }
   };
 
   const removeEntry = (dayIndex: number, entryIndex: number) => {
     const day = getDayData(dayIndex);
-    updateDay(dayIndex, { type: 'work', entries: day.entries.filter((_, i) => i !== entryIndex) });
+    updateDayLocalAndSave(dayIndex, { type: 'work', entries: day.entries.filter((_, i) => i !== entryIndex) });
   };
 
-  const setDayType = (dayIndex: number, type: 'work' | 'conge' | 'absence') => updateDay(dayIndex, { type, entries: [] });
+  const setDayType = (dayIndex: number, type: 'work' | 'conge' | 'absence') => updateDayAndReload(dayIndex, { type, entries: [] });
 
   const weekTotal = calculateWeekTotal(weekData);
   const overtime = calculateOvertime(weekTotal);
@@ -283,9 +301,21 @@ function EditWeekView({ employee, weekKey, setWeekKey, onBack }: { employee: str
                     <div className="space-y-2">
                       {(day.entries || []).map((entry, ei) => (
                         <div key={ei} className="flex items-center gap-2 flex-wrap">
-                          <input type="time" value={entry.start || ''} onChange={(e) => updateEntry(i, ei, 'start', e.target.value)} className="bg-white/10 text-white px-3 py-2 rounded-lg border border-white/20 focus:outline-none focus:border-purple-400" />
+                          <input
+                            type="time"
+                            value={entry.start || ''}
+                            onChange={(e) => updateEntryLocal(i, ei, 'start', e.target.value)}
+                            onBlur={() => persistDay(i)}
+                            className="bg-white/10 text-white px-3 py-2 rounded-lg border border-white/20 focus:outline-none focus:border-purple-400"
+                          />
                           <span className="text-purple-200">→</span>
-                          <input type="time" value={entry.end || ''} onChange={(e) => updateEntry(i, ei, 'end', e.target.value)} className="bg-white/10 text-white px-3 py-2 rounded-lg border border-white/20 focus:outline-none focus:border-purple-400" />
+                          <input
+                            type="time"
+                            value={entry.end || ''}
+                            onChange={(e) => updateEntryLocal(i, ei, 'end', e.target.value)}
+                            onBlur={() => persistDay(i)}
+                            className="bg-white/10 text-white px-3 py-2 rounded-lg border border-white/20 focus:outline-none focus:border-purple-400"
+                          />
                           <span className="text-green-300 font-semibold ml-2">{calculateDayHours(entry.start, entry.end).toFixed(2)}h</span>
                           <button onClick={() => removeEntry(i, ei)} className="ml-auto p-2 text-red-300 hover:text-red-100 hover:bg-red-500/20 rounded-lg">
                             <X className="w-4 h-4" />
@@ -1007,7 +1037,123 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
           </div>
         )}
 
-        {/* FICHES SALARIÉS */}
+        {/* RÉCAP SEMAINE */}
+        <div className="bg-white/5 backdrop-blur rounded-2xl p-5 mb-6">
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+            <button onClick={() => changeWeek(-1)} className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg">← Préc.</button>
+            <div className="text-white font-semibold">Semaine du {formatDate(parseLocalDate(selectedWeek))} au {formatDate(getDayDate(selectedWeek, 5))}</div>
+            <button onClick={() => changeWeek(1)} className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg">Suiv. →</button>
+          </div>
+
+          {loading ? (
+            <div className="flex justify-center py-12"><Loader2 className="w-8 h-8 text-purple-300 animate-spin" /></div>
+          ) : (() => {
+            // Ne montrer que les salariés ayant au moins une entrée (work/conge/absence) sur la semaine
+            const activeEmployees = employees.filter(emp => Object.keys(allWeekData[emp] || {}).length > 0);
+
+            if (activeEmployees.length === 0) {
+              return (
+                <div className="text-center text-purple-300 py-8 italic">
+                  Aucun salarié n&apos;a travaillé cette semaine.
+                </div>
+              );
+            }
+
+            return (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-purple-200 border-b border-white/10">
+                        <th className="text-left p-2">Salarié</th>
+                        <th className="text-right p-2">Total</th>
+                        <th className="text-right p-2">Normales</th>
+                        <th className="text-right p-2 text-green-300">HS +10%</th>
+                        <th className="text-right p-2 text-orange-300">HS +20%</th>
+                        <th className="text-right p-2 text-red-300">HS +50%</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {activeEmployees.map(emp => {
+                        const total = calculateWeekTotal(allWeekData[emp]);
+                        const ot = calculateOvertime(total);
+                        return (
+                          <tr key={emp} className="border-b border-white/5 text-white">
+                            <td className="p-2 font-semibold">{emp}</td>
+                            <td className="p-2 text-right font-bold">{total.toFixed(2)}h</td>
+                            <td className="p-2 text-right">{ot.normal.toFixed(2)}h</td>
+                            <td className="p-2 text-right text-green-300">{ot.at10.toFixed(2)}h</td>
+                            <td className="p-2 text-right text-orange-300">{ot.at20.toFixed(2)}h</td>
+                            <td className="p-2 text-right text-red-300">{ot.at50.toFixed(2)}h</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="mt-6 space-y-4">
+                  {activeEmployees.map(emp => {
+                    const weekData = allWeekData[emp] || {};
+                    return (
+                      <div key={emp} className="bg-white/5 rounded-lg p-3">
+                        <div className="text-white font-semibold mb-2">{emp}</div>
+                        <div className="grid grid-cols-6 gap-2">
+                          {DAYS.map((dayName, i) => {
+                            const d = weekData[i];
+                            const dayDate = getDayDate(selectedWeek, i);
+                            let label = '—';
+                            let cls = 'text-purple-300';
+                            if (d) {
+                              if (d.type === 'absence') { label = 'ABS'; cls = 'text-red-300'; }
+                              else if (d.type === 'conge') { label = 'Congé'; cls = 'text-blue-300'; }
+                              else if (d.entries && d.entries.length > 0) {
+                                const h = d.entries.reduce((s, e) => s + calculateDayHours(e.start, e.end), 0);
+                                label = h.toFixed(2) + 'h';
+                                cls = 'text-green-300';
+                              }
+                            }
+                            return (
+                              <div key={i} className="text-center bg-white/5 rounded p-2">
+                                <div className="text-xs text-purple-300">{dayName.slice(0, 3)}</div>
+                                <div className="text-xs text-purple-400">{formatDateShort(dayDate)}</div>
+                                <div className={`font-semibold ${cls}`}>{label}</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            );
+          })()}
+        </div>
+
+        {/* EXPORT */}
+        <div className="bg-white/5 backdrop-blur rounded-2xl p-5 mb-6">
+          <h2 className="text-white font-semibold mb-3 flex items-center gap-2">
+            <Download className="w-5 h-5" /> Export CSV
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label className="text-purple-200 text-sm">Semaine de début</label>
+              <input type="date" value={exportStart} onChange={(e) => setExportStart(getWeekKey(new Date(e.target.value)))} className="w-full mt-1 px-3 py-2 bg-white/10 text-white rounded-lg border border-white/20" />
+            </div>
+            <div>
+              <label className="text-purple-200 text-sm">Semaine de fin</label>
+              <input type="date" value={exportEnd} onChange={(e) => setExportEnd(getWeekKey(new Date(e.target.value)))} className="w-full mt-1 px-3 py-2 bg-white/10 text-white rounded-lg border border-white/20" />
+            </div>
+            <div className="flex items-end">
+              <button onClick={exportCSV} className="w-full py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-semibold flex items-center justify-center gap-2">
+                <Download className="w-4 h-4" /> Télécharger
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* FICHES SALARIÉS (en bas de page) */}
         <div className="bg-white/5 backdrop-blur rounded-2xl p-5 mb-6">
           <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
             <h2 className="text-white font-semibold flex items-center gap-2">
@@ -1050,109 +1196,6 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
           {profiles.length === 0 && (
             <div className="text-center text-purple-300 py-6 text-sm italic">Aucun salarié enregistré.</div>
           )}
-        </div>
-
-        {/* RÉCAP SEMAINE */}
-        <div className="bg-white/5 backdrop-blur rounded-2xl p-5 mb-6">
-          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-            <button onClick={() => changeWeek(-1)} className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg">← Préc.</button>
-            <div className="text-white font-semibold">Semaine du {formatDate(parseLocalDate(selectedWeek))} au {formatDate(getDayDate(selectedWeek, 5))}</div>
-            <button onClick={() => changeWeek(1)} className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg">Suiv. →</button>
-          </div>
-
-          {loading ? (
-            <div className="flex justify-center py-12"><Loader2 className="w-8 h-8 text-purple-300 animate-spin" /></div>
-          ) : (
-            <>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-purple-200 border-b border-white/10">
-                      <th className="text-left p-2">Salarié</th>
-                      <th className="text-right p-2">Total</th>
-                      <th className="text-right p-2">Normales</th>
-                      <th className="text-right p-2 text-green-300">HS +10%</th>
-                      <th className="text-right p-2 text-orange-300">HS +20%</th>
-                      <th className="text-right p-2 text-red-300">HS +50%</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {employees.map(emp => {
-                      const total = calculateWeekTotal(allWeekData[emp]);
-                      const ot = calculateOvertime(total);
-                      return (
-                        <tr key={emp} className="border-b border-white/5 text-white">
-                          <td className="p-2 font-semibold">{emp}</td>
-                          <td className="p-2 text-right font-bold">{total.toFixed(2)}h</td>
-                          <td className="p-2 text-right">{ot.normal.toFixed(2)}h</td>
-                          <td className="p-2 text-right text-green-300">{ot.at10.toFixed(2)}h</td>
-                          <td className="p-2 text-right text-orange-300">{ot.at20.toFixed(2)}h</td>
-                          <td className="p-2 text-right text-red-300">{ot.at50.toFixed(2)}h</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="mt-6 space-y-4">
-                {employees.map(emp => {
-                  const weekData = allWeekData[emp] || {};
-                  return (
-                    <div key={emp} className="bg-white/5 rounded-lg p-3">
-                      <div className="text-white font-semibold mb-2">{emp}</div>
-                      <div className="grid grid-cols-6 gap-2">
-                        {DAYS.map((dayName, i) => {
-                          const d = weekData[i];
-                          const dayDate = getDayDate(selectedWeek, i);
-                          let label = '—';
-                          let cls = 'text-purple-300';
-                          if (d) {
-                            if (d.type === 'absence') { label = 'ABS'; cls = 'text-red-300'; }
-                            else if (d.type === 'conge') { label = 'Congé'; cls = 'text-blue-300'; }
-                            else if (d.entries && d.entries.length > 0) {
-                              const h = d.entries.reduce((s, e) => s + calculateDayHours(e.start, e.end), 0);
-                              label = h.toFixed(2) + 'h';
-                              cls = 'text-green-300';
-                            }
-                          }
-                          return (
-                            <div key={i} className="text-center bg-white/5 rounded p-2">
-                              <div className="text-xs text-purple-300">{dayName.slice(0, 3)}</div>
-                              <div className="text-xs text-purple-400">{formatDateShort(dayDate)}</div>
-                              <div className={`font-semibold ${cls}`}>{label}</div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* EXPORT */}
-        <div className="bg-white/5 backdrop-blur rounded-2xl p-5 mb-6">
-          <h2 className="text-white font-semibold mb-3 flex items-center gap-2">
-            <Download className="w-5 h-5" /> Export CSV
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div>
-              <label className="text-purple-200 text-sm">Semaine de début</label>
-              <input type="date" value={exportStart} onChange={(e) => setExportStart(getWeekKey(new Date(e.target.value)))} className="w-full mt-1 px-3 py-2 bg-white/10 text-white rounded-lg border border-white/20" />
-            </div>
-            <div>
-              <label className="text-purple-200 text-sm">Semaine de fin</label>
-              <input type="date" value={exportEnd} onChange={(e) => setExportEnd(getWeekKey(new Date(e.target.value)))} className="w-full mt-1 px-3 py-2 bg-white/10 text-white rounded-lg border border-white/20" />
-            </div>
-            <div className="flex items-end">
-              <button onClick={exportCSV} className="w-full py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-semibold flex items-center justify-center gap-2">
-                <Download className="w-4 h-4" /> Télécharger
-              </button>
-            </div>
-          </div>
         </div>
 
         <div className="bg-white/5 backdrop-blur rounded-2xl p-5">
@@ -1210,18 +1253,23 @@ function SelectionView({ employees, onSelectEmployee, onAdmin, onToday, onPlanni
   onToday: () => void;
   onPlanning: () => void;
 }) {
-  const [scheduledCount, setScheduledCount] = useState<number | null>(null);
+  const [scheduledToday, setScheduledToday] = useState<string[] | null>(null);
   const today = new Date();
   const todayWeekKey = getWeekKey(today);
   const todayDayIndex = getTodayDayIndex();
 
   useEffect(() => {
-    if (todayDayIndex < 0) { setScheduledCount(0); return; }
+    if (todayDayIndex < 0) { setScheduledToday([]); return; }
     fetchPlanning(todayWeekKey).then(custom => {
       const effective = getEffectivePlanning(custom, employees);
-      setScheduledCount((effective[todayDayIndex] || []).length);
-    }).catch(() => setScheduledCount(null));
+      setScheduledToday(effective[todayDayIndex] || []);
+    }).catch(() => setScheduledToday(null));
   }, [todayWeekKey, todayDayIndex, employees]);
+
+  const scheduledCount = scheduledToday?.length ?? null;
+  // Liste affichée dans la grille de pointage individuel : uniquement les salariés prévus aujourd'hui.
+  // Si le planning n'a pas encore chargé (null) on n'affiche rien pour éviter le flash de la liste complète.
+  const visibleEmployees = scheduledToday || [];
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-4">
@@ -1252,13 +1300,21 @@ function SelectionView({ employees, onSelectEmployee, onAdmin, onToday, onPlanni
 
         <div className="bg-white/5 backdrop-blur rounded-2xl p-5 mb-6">
           <h2 className="text-white font-semibold mb-4 text-center">Pointage individuel — Qui es-tu ?</h2>
-          <div className="grid grid-cols-2 gap-3">
-            {employees.map(emp => (
-              <button key={emp} onClick={() => onSelectEmployee(emp)} className="py-6 bg-white/10 hover:bg-white/20 border border-white/20 hover:border-purple-400 text-white rounded-xl text-xl font-bold transition-all transform hover:scale-105">
-                {emp}
-              </button>
-            ))}
-          </div>
+          {todayDayIndex < 0 ? (
+            <div className="text-center text-yellow-200 italic py-4">Bar fermé le lundi — pas de pointage aujourd&apos;hui.</div>
+          ) : visibleEmployees.length === 0 ? (
+            <div className="text-center text-purple-300 italic py-4">
+              Personne n&apos;est prévu aujourd&apos;hui d&apos;après le planning.
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              {visibleEmployees.map(emp => (
+                <button key={emp} onClick={() => onSelectEmployee(emp)} className="py-6 bg-white/10 hover:bg-white/20 border border-white/20 hover:border-purple-400 text-white rounded-xl text-xl font-bold transition-all transform hover:scale-105">
+                  {emp}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="text-center">
