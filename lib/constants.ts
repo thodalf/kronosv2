@@ -5,7 +5,7 @@ export const DEFAULT_EMPLOYEES = ['Benoit', 'Marelle', 'Corentin', 'Adel'];
 
 // Planning par défaut : dayIndex (0=mardi ... 5=dimanche) → liste de salariés
 export const DEFAULT_PLANNING: Record<number, string[]> = {
-  0: ['Benoit', 'Marelle', 'Corentin', 'Adel'],  // Mardi
+  0: ['Benoit', 'Corentin', 'Adel'],  // Mardi
   1: ['Benoit', 'Marelle', 'Adel'],              // Mercredi
   2: ['Benoit', 'Marelle', 'Adel'],              // Jeudi
   3: ['Benoit', 'Marelle', 'Adel'],              // Vendredi

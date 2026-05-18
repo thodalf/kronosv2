@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { DAYS, DEFAULT_EMPLOYEES, DayData, WeekData, EmployeeProfile } from '@/lib/constants';
 import {
-  parseLocalDate, getWeekKey, getDayDate, shiftWeek,
+  parseLocalDate, formatLocalKey, getWeekKey, getDayDate, shiftWeek,
   formatDate, formatDateShort, getTodayDayIndex,
   calculateDayHours, calculateOvertime, calculateWeekTotal,
 } from '@/lib/utils';
@@ -907,8 +907,10 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
   const [pwdError, setPwdError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [selectedWeek, setSelectedWeek] = useState(getWeekKey(new Date()));
-  const [exportStart, setExportStart] = useState(getWeekKey(new Date()));
-  const [exportEnd, setExportEnd] = useState(getWeekKey(new Date()));
+  // Dates brutes saisies par l'utilisateur (n'importe quel jour de la semaine accepté).
+  // La résolution en weekKey (mardi) se fait au moment de l'export.
+  const [exportStart, setExportStart] = useState(formatLocalKey(new Date()));
+  const [exportEnd, setExportEnd] = useState(formatLocalKey(new Date()));
   const [allWeekData, setAllWeekData] = useState<Record<string, WeekData>>({});
   const [loading, setLoading] = useState(false);
 
@@ -994,24 +996,87 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
   const changeWeek = (offset: number) => setSelectedWeek(shiftWeek(selectedWeek, offset));
 
   const exportCSV = async () => {
-    const startDate = parseLocalDate(exportStart);
-    const endDate = parseLocalDate(exportEnd);
-    if (endDate < startDate) { alert('Date de fin avant date de début'); return; }
+    if (!exportStart || !exportEnd) { alert('Sélectionne une date de début et de fin'); return; }
+    // On résout les dates saisies → semaines HCR englobantes
+    const startWeek = getWeekKey(parseLocalDate(exportStart));
+    const endWeek = getWeekKey(parseLocalDate(exportEnd));
+    if (parseLocalDate(endWeek) < parseLocalDate(startWeek)) {
+      alert('Date de fin avant date de début');
+      return;
+    }
 
+    // Construction de la liste des semaines à inclure
     const weeks: string[] = [];
-    let cursorKey = exportStart;
-    while (parseLocalDate(cursorKey) <= endDate) {
+    let cursorKey = startWeek;
+    while (parseLocalDate(cursorKey) <= parseLocalDate(endWeek)) {
       weeks.push(cursorKey);
       cursorKey = shiftWeek(cursorKey, 1);
     }
 
-    const lines = ['Salarié;Nom;Téléphone;Semaine du;au;Mardi;Mercredi;Jeudi;Vendredi;Samedi;Dimanche;Total;Normales;HS +10%;HS +20%;HS +50%'];
+    // Pré-charge toutes les semaines
+    const weeksData: Record<string, Record<string, WeekData>> = {};
+    for (const wk of weeks) {
+      weeksData[wk] = await fetchAllWeekData(wk, employees);
+    }
+
+    // ============================================================
+    // SECTION 1 : Récap cumulé par salarié sur toute la plage
+    // ============================================================
+    const lines: string[] = [];
+    lines.push(`Récapitulatif cumulé du ${formatDate(parseLocalDate(startWeek))} au ${formatDate(getDayDate(endWeek, 5))}`);
+    lines.push('Salarié;Nom;Téléphone;Total heures;Heures normales;HS +10%;HS +20%;HS +50%;Total HS');
+
+    employees.forEach(emp => {
+      const profile = profiles.find(p => p.name === emp);
+      // Cumul sur toutes les semaines : on ré-applique les paliers HCR par semaine
+      // puis on somme. (Les paliers se calculent semaine par semaine, pas sur le cumul.)
+      let cumulTotal = 0, cumulNormal = 0, cumul10 = 0, cumul20 = 0, cumul50 = 0;
+      let hasAnyData = false;
+      weeks.forEach(wk => {
+        const weekData = weeksData[wk][emp] || {};
+        if (Object.keys(weekData).length > 0) hasAnyData = true;
+        const total = calculateWeekTotal(weekData);
+        const ot = calculateOvertime(total);
+        cumulTotal += total;
+        cumulNormal += ot.normal;
+        cumul10 += ot.at10;
+        cumul20 += ot.at20;
+        cumul50 += ot.at50;
+      });
+
+      // On n'inclut un extra que s'il a au moins une entrée sur la plage
+      const isExtra = profile?.is_extra ?? false;
+      if (isExtra && !hasAnyData) return;
+
+      const totalHS = cumul10 + cumul20 + cumul50;
+      lines.push([
+        emp,
+        profile?.last_name || '',
+        profile?.phone || '',
+        cumulTotal.toFixed(2),
+        cumulNormal.toFixed(2),
+        cumul10.toFixed(2),
+        cumul20.toFixed(2),
+        cumul50.toFixed(2),
+        totalHS.toFixed(2),
+      ].join(';'));
+    });
+
+    // ============================================================
+    // SECTION 2 : Détail semaine par semaine (en annexe)
+    // ============================================================
+    lines.push('');
+    lines.push('Détail semaine par semaine');
+    lines.push('Salarié;Semaine du;au;Mardi;Mercredi;Jeudi;Vendredi;Samedi;Dimanche;Total;Normales;HS +10%;HS +20%;HS +50%');
 
     for (const wk of weeks) {
-      const data = await fetchAllWeekData(wk, employees);
       employees.forEach(emp => {
+        const weekData = weeksData[wk][emp] || {};
         const profile = profiles.find(p => p.name === emp);
-        const weekData = data[emp] || {};
+        const isExtra = profile?.is_extra ?? false;
+        // Même règle : ne pas inclure les extras sans données
+        if (isExtra && Object.keys(weekData).length === 0) return;
+
         const dayCells = DAYS.map((_, i) => {
           const d = weekData[i];
           if (!d) return '0';
@@ -1023,8 +1088,6 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
         const ot = calculateOvertime(total);
         lines.push([
           emp,
-          profile?.last_name || '',
-          profile?.phone || '',
           formatDate(parseLocalDate(wk)),
           formatDate(getDayDate(wk, 5)),
           ...dayCells,
@@ -1268,12 +1331,32 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
-              <label className="text-purple-200 text-sm">Semaine de début</label>
-              <input type="date" value={exportStart} onChange={(e) => setExportStart(getWeekKey(new Date(e.target.value)))} className="w-full mt-1 px-3 py-2 bg-white/10 text-white rounded-lg border border-white/20" />
+              <label className="text-purple-200 text-sm">Date de début</label>
+              <input
+                type="date"
+                value={exportStart}
+                onChange={(e) => setExportStart(e.target.value)}
+                className="w-full mt-1 px-3 py-2 bg-white/10 text-white rounded-lg border border-white/20"
+              />
+              {exportStart && (
+                <p className="text-xs text-purple-400 mt-1">
+                  → semaine du {formatDateShort(parseLocalDate(getWeekKey(parseLocalDate(exportStart))))}
+                </p>
+              )}
             </div>
             <div>
-              <label className="text-purple-200 text-sm">Semaine de fin</label>
-              <input type="date" value={exportEnd} onChange={(e) => setExportEnd(getWeekKey(new Date(e.target.value)))} className="w-full mt-1 px-3 py-2 bg-white/10 text-white rounded-lg border border-white/20" />
+              <label className="text-purple-200 text-sm">Date de fin</label>
+              <input
+                type="date"
+                value={exportEnd}
+                onChange={(e) => setExportEnd(e.target.value)}
+                className="w-full mt-1 px-3 py-2 bg-white/10 text-white rounded-lg border border-white/20"
+              />
+              {exportEnd && (
+                <p className="text-xs text-purple-400 mt-1">
+                  → semaine au {formatDateShort(getDayDate(getWeekKey(parseLocalDate(exportEnd)), 5))}
+                </p>
+              )}
             </div>
             <div className="flex items-end">
               <button onClick={exportCSV} className="w-full py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-semibold flex items-center justify-center gap-2">
