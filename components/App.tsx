@@ -353,6 +353,7 @@ function EmployeeFormModal({ profile, onSave, onCancel, isNew }: {
   const [lastName, setLastName] = useState(profile.last_name || '');
   const [phone, setPhone] = useState(profile.phone || '');
   const [comment, setComment] = useState(profile.comment || '');
+  const [isExtra, setIsExtra] = useState(profile.is_extra);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -366,6 +367,7 @@ function EmployeeFormModal({ profile, onSave, onCancel, isNew }: {
         last_name: lastName.trim() || null,
         phone: phone.trim() || null,
         comment: comment.trim() || null,
+        is_extra: isExtra,
       });
     } catch (e: any) {
       setError(e?.message || 'Erreur lors de l\'enregistrement');
@@ -435,6 +437,22 @@ function EmployeeFormModal({ profile, onSave, onCancel, isNew }: {
               className="w-full px-3 py-2 bg-white/10 text-white rounded-lg border border-white/20 focus:outline-none focus:border-purple-400 resize-y min-h-[80px]"
             />
           </div>
+
+          <label className="flex items-start gap-3 cursor-pointer bg-white/5 border border-white/10 rounded-lg p-3 hover:bg-white/10 transition">
+            <input
+              type="checkbox"
+              checked={isExtra}
+              onChange={(e) => setIsExtra(e.target.checked)}
+              className="mt-1 w-4 h-4 accent-purple-500 cursor-pointer"
+            />
+            <div className="flex-1">
+              <div className="text-white text-sm font-semibold">Est un extra</div>
+              <div className="text-purple-300 text-xs mt-0.5">
+                Coché : salarié occasionnel, n&apos;apparaît dans le récap admin que les semaines où il a travaillé.
+                Décoché : salarié permanent, toujours visible dans le récap.
+              </div>
+            </div>
+          </label>
         </div>
 
         {error && <div className="bg-red-500/20 border border-red-400/40 text-red-200 text-sm p-2 rounded mb-3">{error}</div>}
@@ -687,7 +705,7 @@ function PlanningView({ employees, onEmployeesChange, onBack }: { employees: str
 
         {showAddForm && (
           <EmployeeFormModal
-            profile={{ name: '', last_name: null, phone: null, comment: null }}
+            profile={{ name: '', last_name: null, phone: null, comment: null, is_extra: false }}
             onSave={handleCreateEmployee}
             onCancel={() => setShowAddForm(false)}
             isNew
@@ -894,6 +912,22 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
   const [allWeekData, setAllWeekData] = useState<Record<string, WeekData>>({});
   const [loading, setLoading] = useState(false);
 
+  // Cellule jour×salarié actuellement ouverte pour modification (congé/absence/effacer)
+  const [openCell, setOpenCell] = useState<{ employee: string; dayIndex: number } | null>(null);
+
+  // Modifie le type d'un jour pour un salarié donné depuis le récap admin
+  const setDayTypeForEmployee = async (employee: string, dayIndex: number, type: 'conge' | 'absence' | 'clear') => {
+    try {
+      if (type === 'clear') {
+        await saveDayData(employee, selectedWeek, dayIndex, { type: 'work', entries: [] });
+      } else {
+        await saveDayData(employee, selectedWeek, dayIndex, { type, entries: [] });
+      }
+      setOpenCell(null);
+      await reload();
+    } catch (e) { console.error(e); }
+  };
+
   // Fiches salariés
   const [profiles, setProfiles] = useState<EmployeeProfile[]>([]);
   const [editingProfile, setEditingProfile] = useState<EmployeeProfile | null>(null);
@@ -1067,13 +1101,19 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
           {loading ? (
             <div className="flex justify-center py-12"><Loader2 className="w-8 h-8 text-purple-300 animate-spin" /></div>
           ) : (() => {
-            // Ne montrer que les salariés ayant au moins une entrée (work/conge/absence) sur la semaine
-            const activeEmployees = employees.filter(emp => Object.keys(allWeekData[emp] || {}).length > 0);
+            // Permanents (is_extra = false) : toujours visibles.
+            // Extras (is_extra = true) : visibles uniquement s'ils ont au moins une entrée cette semaine.
+            const extraNames = new Set(profiles.filter(p => p.is_extra).map(p => p.name));
+            const visibleEmployees = employees.filter(emp => {
+              const isExtra = extraNames.has(emp);
+              const hasEntries = Object.keys(allWeekData[emp] || {}).length > 0;
+              return !isExtra || hasEntries;
+            });
 
-            if (activeEmployees.length === 0) {
+            if (visibleEmployees.length === 0) {
               return (
                 <div className="text-center text-purple-300 py-8 italic">
-                  Aucun salarié n&apos;a travaillé cette semaine.
+                  Aucun salarié à afficher pour cette semaine.
                 </div>
               );
             }
@@ -1093,7 +1133,7 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
                       </tr>
                     </thead>
                     <tbody>
-                      {activeEmployees.map(emp => {
+                      {visibleEmployees.map(emp => {
                         const total = calculateWeekTotal(allWeekData[emp]);
                         const ot = calculateOvertime(total);
                         return (
@@ -1111,8 +1151,11 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
                   </table>
                 </div>
 
-                <div className="mt-6 space-y-4">
-                  {activeEmployees.map(emp => {
+                <div className="mt-6 mb-2 text-xs text-purple-400 italic">
+                  💡 Clique sur une case pour ajouter un congé ou une absence.
+                </div>
+                <div className="space-y-4">
+                  {visibleEmployees.map(emp => {
                     const weekData = allWeekData[emp] || {};
                     return (
                       <div key={emp} className="bg-white/5 rounded-lg p-3">
@@ -1123,6 +1166,7 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
                             const dayDate = getDayDate(selectedWeek, i);
                             let label = '—';
                             let cls = 'text-purple-300';
+                            let hasEntries = false;
                             if (d) {
                               if (d.type === 'absence') { label = 'ABS'; cls = 'text-red-300'; }
                               else if (d.type === 'conge') { label = 'Congé'; cls = 'text-blue-300'; }
@@ -1130,13 +1174,57 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
                                 const h = d.entries.reduce((s, e) => s + calculateDayHours(e.start, e.end), 0);
                                 label = h.toFixed(2) + 'h';
                                 cls = 'text-green-300';
+                                hasEntries = true;
                               }
                             }
+                            const isOpen = openCell?.employee === emp && openCell?.dayIndex === i;
+                            const isCurrentConge = d?.type === 'conge';
+                            const isCurrentAbsence = d?.type === 'absence';
+
                             return (
-                              <div key={i} className="text-center bg-white/5 rounded p-2">
-                                <div className="text-xs text-purple-300">{dayName.slice(0, 3)}</div>
-                                <div className="text-xs text-purple-400">{formatDateShort(dayDate)}</div>
-                                <div className={`font-semibold ${cls}`}>{label}</div>
+                              <div key={i} className="relative">
+                                <button
+                                  onClick={() => setOpenCell(isOpen ? null : { employee: emp, dayIndex: i })}
+                                  className="w-full text-center bg-white/5 hover:bg-white/10 rounded p-2 transition cursor-pointer"
+                                  title="Cliquer pour gérer congé / absence"
+                                >
+                                  <div className="text-xs text-purple-300">{dayName.slice(0, 3)}</div>
+                                  <div className="text-xs text-purple-400">{formatDateShort(dayDate)}</div>
+                                  <div className={`font-semibold ${cls}`}>{label}</div>
+                                </button>
+                                {isOpen && (
+                                  <>
+                                    {/* Overlay pour fermer en cliquant à l'extérieur */}
+                                    <div className="fixed inset-0 z-10" onClick={() => setOpenCell(null)} />
+                                    <div className="absolute z-20 mt-1 left-1/2 -translate-x-1/2 bg-slate-800 border border-white/20 rounded-lg shadow-xl p-2 min-w-[140px] space-y-1">
+                                      <button
+                                        onClick={() => setDayTypeForEmployee(emp, i, 'conge')}
+                                        disabled={isCurrentConge}
+                                        className={`w-full px-3 py-2 text-sm rounded flex items-center gap-2 ${isCurrentConge ? 'bg-blue-600/40 text-blue-100 cursor-default' : 'hover:bg-blue-600/30 text-blue-200'}`}
+                                      >
+                                        <Plane className="w-4 h-4" /> Congé
+                                      </button>
+                                      <button
+                                        onClick={() => setDayTypeForEmployee(emp, i, 'absence')}
+                                        disabled={isCurrentAbsence}
+                                        className={`w-full px-3 py-2 text-sm rounded flex items-center gap-2 ${isCurrentAbsence ? 'bg-red-600/40 text-red-100 cursor-default' : 'hover:bg-red-600/30 text-red-200'}`}
+                                      >
+                                        <AlertCircle className="w-4 h-4" /> Absent
+                                      </button>
+                                      {(isCurrentConge || isCurrentAbsence || hasEntries) && (
+                                        <button
+                                          onClick={() => {
+                                            if (hasEntries && !confirm('Effacer ce jour supprimera aussi les pointages saisis. Continuer ?')) return;
+                                            setDayTypeForEmployee(emp, i, 'clear');
+                                          }}
+                                          className="w-full px-3 py-2 text-sm rounded flex items-center gap-2 hover:bg-white/10 text-purple-200"
+                                        >
+                                          <X className="w-4 h-4" /> Effacer
+                                        </button>
+                                      )}
+                                    </div>
+                                  </>
+                                )}
                               </div>
                             );
                           })}
@@ -1188,8 +1276,13 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
               <div key={profile.name} className="bg-white/5 rounded-xl p-4 border border-white/10 hover:border-white/20 transition">
                 <div className="flex items-start justify-between gap-2 mb-3">
                   <div className="flex-1 min-w-0">
-                    <div className="text-white font-semibold text-lg">
-                      {profile.name} {profile.last_name && <span className="text-purple-200 font-normal">{profile.last_name}</span>}
+                    <div className="text-white font-semibold text-lg flex items-center gap-2 flex-wrap">
+                      <span>{profile.name} {profile.last_name && <span className="text-purple-200 font-normal">{profile.last_name}</span>}</span>
+                      {profile.is_extra && (
+                        <span className="bg-orange-500/30 text-orange-200 text-xs font-semibold px-2 py-0.5 rounded-full border border-orange-400/40">
+                          Extra
+                        </span>
+                      )}
                     </div>
                     {profile.phone ? (
                       <a href={`tel:${profile.phone.replace(/\s/g, '')}`} className="text-purple-300 text-sm hover:text-white flex items-center gap-1 mt-1">
@@ -1246,7 +1339,7 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
         )}
         {addingProfile && (
           <EmployeeFormModal
-            profile={{ name: '', last_name: null, phone: null, comment: null }}
+            profile={{ name: '', last_name: null, phone: null, comment: null, is_extra: false }}
             onSave={handleSaveProfile}
             onCancel={() => setAddingProfile(false)}
             isNew

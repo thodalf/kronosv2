@@ -18,6 +18,7 @@ export interface EmployeeProfile {
   last_name: string | null;
   phone: string | null;
   comment: string | null;
+  is_extra: boolean;
 }
 
 export type DayType = 'work' | 'conge' | 'absence';
