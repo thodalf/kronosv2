@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Clock, LogIn, LogOut, Edit3, Download, Users, Settings, ChevronLeft,
   Calendar, AlertCircle, Plane, Check, X, Plus, CalendarCheck, Zap, UserPlus, Loader2,
-  Phone, User, Key, Save,
+  Phone, User, Key, Save, MessageSquare,
 } from 'lucide-react';
 import { DAYS, DEFAULT_EMPLOYEES, DayData, WeekData, EmployeeProfile } from '@/lib/constants';
 import {
@@ -352,6 +352,7 @@ function EmployeeFormModal({ profile, onSave, onCancel, isNew }: {
   const [name, setName] = useState(profile.name);
   const [lastName, setLastName] = useState(profile.last_name || '');
   const [phone, setPhone] = useState(profile.phone || '');
+  const [comment, setComment] = useState(profile.comment || '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -360,7 +361,12 @@ function EmployeeFormModal({ profile, onSave, onCancel, isNew }: {
     if (!name.trim()) { setError('Le prénom est obligatoire'); return; }
     setSaving(true);
     try {
-      await onSave({ name: name.trim(), last_name: lastName.trim() || null, phone: phone.trim() || null });
+      await onSave({
+        name: name.trim(),
+        last_name: lastName.trim() || null,
+        phone: phone.trim() || null,
+        comment: comment.trim() || null,
+      });
     } catch (e: any) {
       setError(e?.message || 'Erreur lors de l\'enregistrement');
       setSaving(false);
@@ -414,6 +420,19 @@ function EmployeeFormModal({ profile, onSave, onCancel, isNew }: {
               onChange={(e) => setPhone(e.target.value)}
               placeholder="ex: 06 12 34 56 78"
               className="w-full px-3 py-2 bg-white/10 text-white rounded-lg border border-white/20 focus:outline-none focus:border-purple-400"
+            />
+          </div>
+
+          <div>
+            <label className="text-purple-200 text-sm flex items-center gap-1 mb-1">
+              <MessageSquare className="w-3 h-3" /> Commentaire
+            </label>
+            <textarea
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              rows={3}
+              placeholder="Notes libres : disponibilités, contrat, infos diverses..."
+              className="w-full px-3 py-2 bg-white/10 text-white rounded-lg border border-white/20 focus:outline-none focus:border-purple-400 resize-y min-h-[80px]"
             />
           </div>
         </div>
@@ -668,7 +687,7 @@ function PlanningView({ employees, onEmployeesChange, onBack }: { employees: str
 
         {showAddForm && (
           <EmployeeFormModal
-            profile={{ name: '', last_name: null, phone: null }}
+            profile={{ name: '', last_name: null, phone: null, comment: null }}
             onSave={handleCreateEmployee}
             onCancel={() => setShowAddForm(false)}
             isNew
@@ -1189,6 +1208,12 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
                     </button>
                   </div>
                 </div>
+                {profile.comment && (
+                  <div className="bg-white/5 rounded-lg p-2 text-purple-200 text-sm flex gap-2 items-start">
+                    <MessageSquare className="w-3 h-3 mt-1 flex-shrink-0 text-purple-400" />
+                    <span className="whitespace-pre-wrap break-words">{profile.comment}</span>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -1221,7 +1246,7 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
         )}
         {addingProfile && (
           <EmployeeFormModal
-            profile={{ name: '', last_name: null, phone: null }}
+            profile={{ name: '', last_name: null, phone: null, comment: null }}
             onSave={handleSaveProfile}
             onCancel={() => setAddingProfile(false)}
             isNew

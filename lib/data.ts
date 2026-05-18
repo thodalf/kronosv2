@@ -15,7 +15,7 @@ export async function fetchEmployees(): Promise<string[]> {
 export async function fetchEmployeeProfiles(): Promise<EmployeeProfile[]> {
   const { data, error } = await supabase
     .from('employees')
-    .select('name, last_name, phone')
+    .select('name, last_name, phone, comment')
     .order('created_at');
   if (error) throw error;
   return (data || []) as EmployeeProfile[];
@@ -24,7 +24,7 @@ export async function fetchEmployeeProfiles(): Promise<EmployeeProfile[]> {
 export async function fetchEmployeeProfile(name: string): Promise<EmployeeProfile | null> {
   const { data, error } = await supabase
     .from('employees')
-    .select('name, last_name, phone')
+    .select('name, last_name, phone, comment')
     .eq('name', name)
     .maybeSingle();
   if (error) throw error;
@@ -36,6 +36,7 @@ export async function addEmployee(profile: EmployeeProfile): Promise<void> {
     name: profile.name,
     last_name: profile.last_name || null,
     phone: profile.phone || null,
+    comment: profile.comment || null,
   });
   if (error) throw error;
 }
@@ -46,6 +47,7 @@ export async function updateEmployeeProfile(profile: EmployeeProfile): Promise<v
     .update({
       last_name: profile.last_name || null,
       phone: profile.phone || null,
+      comment: profile.comment || null,
     })
     .eq('name', profile.name);
   if (error) throw error;

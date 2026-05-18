@@ -17,6 +17,7 @@ export interface EmployeeProfile {
   name: string;              // prénom (identifiant)
   last_name: string | null;
   phone: string | null;
+  comment: string | null;
 }
 
 export type DayType = 'work' | 'conge' | 'absence';
