@@ -6,4 +6,20 @@ html, body {
   margin: 0;
   padding: 0;
   background: #0f172a;
+  /* Empêche le pull-to-refresh sur Android et le rebond élastique sur iOS
+     pour un comportement plus proche d'une app native */
+  overscroll-behavior-y: contain;
+  /* Empêche le tap-highlight bleu sur les boutons en mode standalone iOS */
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Safe-area iOS : respecte l'encoche et le home-indicator quand l'app
+   est installée et lancée en plein écran (display: standalone) */
+@supports (padding: env(safe-area-inset-top)) {
+  body {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
 }

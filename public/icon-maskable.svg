@@ -1,0 +1,92 @@
+// Service Worker — Pointage Bar
+// Stratégie : network-first pour Next.js et l'API Supabase (toujours frais quand en ligne),
+// fallback cache pour les assets statiques et la coquille de l'app.
+
+const CACHE_VERSION = 'pointage-bar-v1';
+const STATIC_ASSETS = [
+  '/',
+  '/manifest.json',
+  '/icon.svg',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/icon-maskable-192.png',
+  '/icon-maskable-512.png',
+  '/apple-touch-icon.png',
+  '/favicon-32.png',
+];
+
+// Installation : pré-cache des assets de base
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE_VERSION).then((cache) => {
+      // Cache les assets un par un en ignorant les erreurs (au cas où un fichier manquerait)
+      return Promise.all(
+        STATIC_ASSETS.map((url) =>
+          cache.add(url).catch((err) => console.warn('SW: échec cache de', url, err))
+        )
+      );
+    })
+  );
+  self.skipWaiting();
+});
+
+// Activation : nettoyage des anciens caches
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(
+        keys
+          .filter((k) => k !== CACHE_VERSION)
+          .map((k) => caches.delete(k))
+      )
+    )
+  );
+  self.clients.claim();
+});
+
+// Stratégie de fetch
+self.addEventListener('fetch', (event) => {
+  const { request } = event;
+
+  // Pas de cache pour les méthodes non-GET (POST/PUT/DELETE Supabase)
+  if (request.method !== 'GET') return;
+
+  const url = new URL(request.url);
+
+  // Pas de cache pour Supabase (toujours frais)
+  if (url.hostname.endsWith('supabase.co') || url.hostname.endsWith('supabase.in')) {
+    return;
+  }
+
+  // Pas de cache pour les routes API Next.js
+  if (url.pathname.startsWith('/api/')) return;
+
+  // Pour le HTML / Next.js : network-first avec fallback cache (utile en mode avion)
+  if (request.mode === 'navigate' || request.destination === 'document') {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          const cloned = response.clone();
+          caches.open(CACHE_VERSION).then((cache) => cache.put(request, cloned));
+          return response;
+        })
+        .catch(() => caches.match(request).then((cached) => cached || caches.match('/')))
+    );
+    return;
+  }
+
+  // Pour les assets statiques : cache-first puis network
+  event.respondWith(
+    caches.match(request).then((cached) => {
+      if (cached) return cached;
+      return fetch(request).then((response) => {
+        // Ne cache que les réponses valides du même origin
+        if (response.ok && url.origin === self.location.origin) {
+          const cloned = response.clone();
+          caches.open(CACHE_VERSION).then((cache) => cache.put(request, cloned));
+        }
+        return response;
+      });
+    })
+  );
+});
