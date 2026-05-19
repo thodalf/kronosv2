@@ -13,6 +13,10 @@ export const DEFAULT_PLANNING: Record<number, string[]> = {
   5: ['Corentin'],                               // Dimanche
 };
 
+// Salariés exclus des actions groupées "Tous arrivent" / "Tous partent"
+// (horaires particuliers, à pointer manuellement)
+export const EXCLUDED_FROM_GROUP_ACTIONS = ['Adel'];
+
 export interface EmployeeProfile {
   name: string;              // prénom (identifiant)
   last_name: string | null;

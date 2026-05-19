@@ -6,7 +6,7 @@ import {
   Calendar, AlertCircle, Plane, Check, X, Plus, CalendarCheck, Zap, UserPlus, Loader2,
   Phone, User, Key, Save, MessageSquare,
 } from 'lucide-react';
-import { DAYS, DEFAULT_EMPLOYEES, DayData, WeekData, EmployeeProfile } from '@/lib/constants';
+import { DAYS, DEFAULT_EMPLOYEES, EXCLUDED_FROM_GROUP_ACTIONS, DayData, WeekData, EmployeeProfile } from '@/lib/constants';
 import {
   parseLocalDate, formatLocalKey, getWeekKey, getDayDate, shiftWeek,
   formatDate, formatDateShort, getTodayDayIndex,
@@ -543,13 +543,21 @@ function PasswordChangeModal({ onClose, onSaved }: { onClose: () => void; onSave
 function PlanningView({ employees, onEmployeesChange, onBack }: { employees: string[]; onEmployeesChange: () => Promise<void>; onBack: () => void }) {
   const [weekKey, setWeekKey] = useState(getWeekKey(new Date()));
   const [customPlanning, setCustomPlanning] = useState<WeekPlanning | null>(null);
+  const [profiles, setProfiles] = useState<EmployeeProfile[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showAddMenu, setShowAddMenu] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
 
   const reload = useCallback(async () => {
     setLoading(true);
-    try { setCustomPlanning(await fetchPlanning(weekKey)); }
-    catch (e) { console.error(e); }
+    try {
+      const [planning, profs] = await Promise.all([
+        fetchPlanning(weekKey),
+        fetchEmployeeProfiles(),
+      ]);
+      setCustomPlanning(planning);
+      setProfiles(profs);
+    } catch (e) { console.error(e); }
     setLoading(false);
   }, [weekKey]);
 
@@ -557,6 +565,21 @@ function PlanningView({ employees, onEmployeesChange, onBack }: { employees: str
 
   const effective = getEffectivePlanning(customPlanning, employees);
   const isCustom = customPlanning !== null;
+
+  // Liste des extras déjà prévus dans la semaine (au moins un jour coché)
+  const scheduledExtras = new Set<string>();
+  const extraNames = new Set(profiles.filter(p => p.is_extra).map(p => p.name));
+  (Object.values(effective) as string[][]).forEach(day => {
+    day.forEach(name => { if (extraNames.has(name)) scheduledExtras.add(name); });
+  });
+
+  // Liste des salariés affichés dans le tableau :
+  // - tous les non-extras
+  // - les extras qui ont au moins un jour prévu cette semaine
+  const visibleEmployees = employees.filter(emp => !extraNames.has(emp) || scheduledExtras.has(emp));
+
+  // Extras existants pas encore ajoutés à la semaine (proposés dans le menu d'ajout)
+  const availableExtras = profiles.filter(p => p.is_extra && !scheduledExtras.has(p.name));
 
   const changeWeek = (offset: number) => setWeekKey(shiftWeek(weekKey, offset));
 
@@ -578,7 +601,9 @@ function PlanningView({ employees, onEmployeesChange, onBack }: { employees: str
 
   const fillDay = async (dayIndex: number, all: boolean) => {
     const planning = await materializeIfNeeded();
-    const updated = all ? [...employees] : [];
+    // Sur "Tous" : on coche tous les salariés actuellement visibles (non-extras + extras déjà prévus)
+    // Sur "Aucun" : on garde la liste vide
+    const updated = all ? [...visibleEmployees] : [];
     await savePlanningDay(weekKey, dayIndex, updated);
     setCustomPlanning({ ...planning, [dayIndex]: updated });
   };
@@ -603,7 +628,22 @@ function PlanningView({ employees, onEmployeesChange, onBack }: { employees: str
     }
     await apiAddEmployee(profile);
     await onEmployeesChange();
+    await reload();   // recharge les profiles pour avoir le nouveau dans la liste
     setShowAddForm(false);
+    setShowAddMenu(false);
+  };
+
+  // Ajoute un extra existant à la semaine en le cochant sur le premier jour ouvré (mardi).
+  // Du coup il devient visible dans le tableau et l'admin peut affiner.
+  const addExistingExtraToWeek = async (name: string) => {
+    const planning = await materializeIfNeeded();
+    const current = planning[0] || [];
+    if (!current.includes(name)) {
+      const updated = [...current, name];
+      await savePlanningDay(weekKey, 0, updated);
+      setCustomPlanning({ ...planning, 0: updated });
+    }
+    setShowAddMenu(false);
   };
 
   return (
@@ -656,27 +696,39 @@ function PlanningView({ employees, onEmployeesChange, onBack }: { employees: str
                   </tr>
                 </thead>
                 <tbody>
-                  {employees.map(emp => (
-                    <tr key={emp} className="border-b border-white/5">
-                      <td className="p-2 text-white font-semibold">{emp}</td>
-                      {DAYS.map((_, i) => {
-                        const checked = effective[i]?.includes(emp) || false;
-                        return (
-                          <td key={i} className="p-2">
-                            <div className="flex justify-center items-center">
-                              <button onClick={() => toggleEmployee(i, emp)} className={`w-10 h-10 rounded-lg flex items-center justify-center transition-all ${checked ? 'bg-green-600 hover:bg-green-700 text-white' : 'bg-white/5 hover:bg-white/10 text-purple-300 border border-white/20'}`}>
-                                {checked && <Check className="w-5 h-5" />}
-                              </button>
-                            </div>
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
+                  {visibleEmployees.map(emp => {
+                    const isExtraRow = extraNames.has(emp);
+                    return (
+                      <tr key={emp} className="border-b border-white/5">
+                        <td className="p-2 text-white font-semibold">
+                          <span className="flex items-center gap-2">
+                            {emp}
+                            {isExtraRow && (
+                              <span className="bg-orange-500/30 text-orange-200 text-[10px] font-semibold px-1.5 py-0.5 rounded-full border border-orange-400/40">
+                                Extra
+                              </span>
+                            )}
+                          </span>
+                        </td>
+                        {DAYS.map((_, i) => {
+                          const checked = effective[i]?.includes(emp) || false;
+                          return (
+                            <td key={i} className="p-2">
+                              <div className="flex justify-center items-center">
+                                <button onClick={() => toggleEmployee(i, emp)} className={`w-10 h-10 rounded-lg flex items-center justify-center transition-all ${checked ? 'bg-green-600 hover:bg-green-700 text-white' : 'bg-white/5 hover:bg-white/10 text-purple-300 border border-white/20'}`}>
+                                  {checked && <Check className="w-5 h-5" />}
+                                </button>
+                              </div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
                   <tr>
                     <td className="p-2 text-purple-300 text-sm italic">Tout cocher</td>
                     {DAYS.map((_, i) => {
-                      const all = (effective[i] || []).length === employees.length;
+                      const all = (effective[i] || []).length === visibleEmployees.length && visibleEmployees.length > 0;
                       return (
                         <td key={i} className="p-2">
                           <div className="flex justify-center">
@@ -693,12 +745,43 @@ function PlanningView({ employees, onEmployeesChange, onBack }: { employees: str
             </div>
           )}
 
-          <div className="mt-4 pt-4 border-t border-white/10">
-            <button onClick={() => setShowAddForm(true)} className="w-full py-2 border-2 border-dashed border-white/20 hover:border-purple-400 text-purple-200 hover:text-white rounded-lg flex items-center justify-center gap-2 text-sm">
-              <UserPlus className="w-4 h-4" /> Ajouter un salarié
+          <div className="mt-4 pt-4 border-t border-white/10 relative">
+            <button onClick={() => setShowAddMenu(!showAddMenu)} className="w-full py-2 border-2 border-dashed border-white/20 hover:border-purple-400 text-purple-200 hover:text-white rounded-lg flex items-center justify-center gap-2 text-sm">
+              <UserPlus className="w-4 h-4" /> Ajouter un salarié à la semaine
             </button>
+            {showAddMenu && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setShowAddMenu(false)} />
+                <div className="absolute z-20 left-0 right-0 mt-2 bg-slate-800 border border-white/20 rounded-lg shadow-xl p-2 space-y-1">
+                  {availableExtras.length > 0 && (
+                    <>
+                      <div className="text-xs text-purple-400 uppercase font-semibold px-2 py-1">Extras existants</div>
+                      {availableExtras.map(p => (
+                        <button
+                          key={p.name}
+                          onClick={() => addExistingExtraToWeek(p.name)}
+                          className="w-full text-left px-3 py-2 text-sm rounded hover:bg-white/10 text-white flex items-center gap-2"
+                        >
+                          <span className="flex-1">{p.name} {p.last_name && <span className="text-purple-300 font-normal">{p.last_name}</span>}</span>
+                          <span className="bg-orange-500/30 text-orange-200 text-[10px] font-semibold px-1.5 py-0.5 rounded-full border border-orange-400/40">
+                            Extra
+                          </span>
+                        </button>
+                      ))}
+                      <div className="border-t border-white/10 my-1" />
+                    </>
+                  )}
+                  <button
+                    onClick={() => { setShowAddMenu(false); setShowAddForm(true); }}
+                    className="w-full text-left px-3 py-2 text-sm rounded hover:bg-white/10 text-purple-200 flex items-center gap-2"
+                  >
+                    <Plus className="w-4 h-4" /> Créer un nouveau salarié
+                  </button>
+                </div>
+              </>
+            )}
             <p className="text-xs text-purple-400 mt-2 text-center">
-              Les fiches détaillées (nom, téléphone) se gèrent dans l&apos;espace administrateur.
+              Les permanents sont toujours visibles. Les extras n&apos;apparaissent que s&apos;ils sont prévus cette semaine.
             </p>
           </div>
         </div>
@@ -792,7 +875,9 @@ function TodayView({ employees, onBack }: { employees: string[]; onBack: () => v
 
   const clockInAll = async () => {
     const time = now.toTimeString().slice(0, 5);
-    await Promise.all(scheduled.map(async (emp) => {
+    // Exclut les salariés à horaires particuliers (ils doivent pointer manuellement)
+    const targets = scheduled.filter(emp => !EXCLUDED_FROM_GROUP_ACTIONS.includes(emp));
+    await Promise.all(targets.map(async (emp) => {
       const day = getDayData(emp);
       const hasActive = (day.entries || []).some(e => e.start && !e.end);
       if (hasActive) return;
@@ -806,7 +891,8 @@ function TodayView({ employees, onBack }: { employees: string[]; onBack: () => v
 
   const clockOutAll = async () => {
     const time = now.toTimeString().slice(0, 5);
-    await Promise.all(scheduled.map(async (emp) => {
+    const targets = scheduled.filter(emp => !EXCLUDED_FROM_GROUP_ACTIONS.includes(emp));
+    await Promise.all(targets.map(async (emp) => {
       const day = getDayData(emp);
       if (!day.entries) return;
       const hasActive = day.entries.some(e => e.start && !e.end);
@@ -844,7 +930,7 @@ function TodayView({ employees, onBack }: { employees: string[]; onBack: () => v
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-3 mb-6">
+            <div className="grid grid-cols-2 gap-3 mb-2">
               <button onClick={clockInAll} className="py-6 bg-gradient-to-br from-green-500 to-emerald-700 hover:from-green-600 hover:to-emerald-800 text-white rounded-2xl shadow-xl">
                 <LogIn className="w-10 h-10 mx-auto mb-2" />
                 <div className="text-xl font-bold">Tous arrivent</div>
@@ -856,6 +942,17 @@ function TodayView({ employees, onBack }: { employees: string[]; onBack: () => v
                 <div className="text-red-100 text-xs mt-1">Clôt les pointages actifs</div>
               </button>
             </div>
+            {(() => {
+              const excluded = scheduled.filter(emp => EXCLUDED_FROM_GROUP_ACTIONS.includes(emp));
+              if (excluded.length === 0) return null;
+              const plural = excluded.length > 1;
+              return (
+                <div className="text-xs text-purple-300 italic mb-4 text-center">
+                  ⚠️ {excluded.join(', ')} {plural ? 'ont' : 'a'} des horaires particuliers — à pointer individuellement.
+                </div>
+              );
+            })()}
+            <div className="mb-2" />
 
             <div className="space-y-3">
               {scheduled.map(emp => {
@@ -911,6 +1008,8 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
   // La résolution en weekKey (mardi) se fait au moment de l'export.
   const [exportStart, setExportStart] = useState(formatLocalKey(new Date()));
   const [exportEnd, setExportEnd] = useState(formatLocalKey(new Date()));
+  // Montant total des pourboires bruts à répartir au prorata des heures (sur les non-extras seulement)
+  const [tipsBrut, setTipsBrut] = useState<string>('');
   const [allWeekData, setAllWeekData] = useState<Record<string, WeekData>>({});
   const [loading, setLoading] = useState(false);
 
@@ -1024,42 +1123,74 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
     // ============================================================
     const lines: string[] = [];
     lines.push(`Récapitulatif cumulé du ${formatDate(parseLocalDate(startWeek))} au ${formatDate(getDayDate(endWeek, 5))}`);
-    lines.push('Salarié;Nom;Téléphone;Total heures;Heures normales;HS +10%;HS +20%;HS +50%;Total HS');
 
-    employees.forEach(emp => {
+    // Pré-calcul des totaux par salarié pour pouvoir répartir les tips au prorata
+    interface EmpCumul {
+      name: string; lastName: string; phone: string;
+      total: number; normal: number; at10: number; at20: number; at50: number;
+      hasData: boolean; isExtra: boolean;
+    }
+    const cumuls: EmpCumul[] = employees.map(emp => {
       const profile = profiles.find(p => p.name === emp);
-      // Cumul sur toutes les semaines : on ré-applique les paliers HCR par semaine
-      // puis on somme. (Les paliers se calculent semaine par semaine, pas sur le cumul.)
-      let cumulTotal = 0, cumulNormal = 0, cumul10 = 0, cumul20 = 0, cumul50 = 0;
-      let hasAnyData = false;
+      let total = 0, normal = 0, at10 = 0, at20 = 0, at50 = 0, hasData = false;
       weeks.forEach(wk => {
         const weekData = weeksData[wk][emp] || {};
-        if (Object.keys(weekData).length > 0) hasAnyData = true;
-        const total = calculateWeekTotal(weekData);
-        const ot = calculateOvertime(total);
-        cumulTotal += total;
-        cumulNormal += ot.normal;
-        cumul10 += ot.at10;
-        cumul20 += ot.at20;
-        cumul50 += ot.at50;
+        if (Object.keys(weekData).length > 0) hasData = true;
+        const t = calculateWeekTotal(weekData);
+        const ot = calculateOvertime(t);
+        total += t; normal += ot.normal; at10 += ot.at10; at20 += ot.at20; at50 += ot.at50;
       });
+      return {
+        name: emp,
+        lastName: profile?.last_name || '',
+        phone: profile?.phone || '',
+        total, normal, at10, at20, at50, hasData,
+        isExtra: profile?.is_extra ?? false,
+      };
+    });
 
+    // Tips bruts : répartis au prorata des heures travaillées sur les NON-EXTRAS uniquement
+    const tipsAmount = parseFloat(tipsBrut.replace(',', '.'));
+    const hasTips = !isNaN(tipsAmount) && tipsAmount > 0;
+    const nonExtraTotalHours = cumuls
+      .filter(c => !c.isExtra)
+      .reduce((s, c) => s + c.total, 0);
+
+    if (hasTips) {
+      lines.push(`Tips brut sur la période : ${tipsAmount.toFixed(2)} € — réparti au prorata des heures des non-extras (${nonExtraTotalHours.toFixed(2)}h au total)`);
+    }
+    lines.push(
+      hasTips
+        ? 'Salarié;Nom;Téléphone;Total heures;Heures normales;HS +10%;HS +20%;HS +50%;Total HS;Part tips brut (€)'
+        : 'Salarié;Nom;Téléphone;Total heures;Heures normales;HS +10%;HS +20%;HS +50%;Total HS'
+    );
+
+    cumuls.forEach(c => {
       // On n'inclut un extra que s'il a au moins une entrée sur la plage
-      const isExtra = profile?.is_extra ?? false;
-      if (isExtra && !hasAnyData) return;
+      if (c.isExtra && !c.hasData) return;
 
-      const totalHS = cumul10 + cumul20 + cumul50;
-      lines.push([
-        emp,
-        profile?.last_name || '',
-        profile?.phone || '',
-        cumulTotal.toFixed(2),
-        cumulNormal.toFixed(2),
-        cumul10.toFixed(2),
-        cumul20.toFixed(2),
-        cumul50.toFixed(2),
+      const totalHS = c.at10 + c.at20 + c.at50;
+      // Calcul de la part de tips : 0 si extra, sinon prorata des heures
+      let tipsPart = 0;
+      if (hasTips && !c.isExtra && nonExtraTotalHours > 0) {
+        tipsPart = (c.total / nonExtraTotalHours) * tipsAmount;
+      }
+
+      const row = [
+        c.name,
+        c.lastName,
+        c.phone,
+        c.total.toFixed(2),
+        c.normal.toFixed(2),
+        c.at10.toFixed(2),
+        c.at20.toFixed(2),
+        c.at50.toFixed(2),
         totalHS.toFixed(2),
-      ].join(';'));
+      ];
+      if (hasTips) {
+        row.push(c.isExtra ? '0.00' : tipsPart.toFixed(2));
+      }
+      lines.push(row.join(';'));
     });
 
     // ============================================================
@@ -1358,7 +1489,22 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
                 </p>
               )}
             </div>
-            <div className="flex items-end">
+            <div>
+              <label className="text-purple-200 text-sm">Tips brut (€) <span className="text-purple-400 font-normal">— optionnel</span></label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={tipsBrut}
+                onChange={(e) => setTipsBrut(e.target.value)}
+                placeholder="ex: 350.00"
+                className="w-full mt-1 px-3 py-2 bg-white/10 text-white rounded-lg border border-white/20"
+              />
+              <p className="text-xs text-purple-400 mt-1">
+                Réparti au prorata des heures des non-extras.
+              </p>
+            </div>
+            <div className="flex items-end md:col-span-3">
               <button onClick={exportCSV} className="w-full py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-semibold flex items-center justify-center gap-2">
                 <Download className="w-4 h-4" /> Télécharger
               </button>
