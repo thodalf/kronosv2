@@ -6,7 +6,7 @@ import {
   Calendar, AlertCircle, Plane, Check, X, Plus, CalendarCheck, Zap, UserPlus, Loader2,
   Phone, User, Key, Save, MessageSquare,
 } from 'lucide-react';
-import { DAYS, DEFAULT_EMPLOYEES, EXCLUDED_FROM_GROUP_ACTIONS, DayData, WeekData, EmployeeProfile } from '@/lib/constants';
+import { DAYS, DEFAULT_EMPLOYEES, EXCLUDED_FROM_GROUP_ACTIONS, EXCLUDED_FROM_TIPS, TIPS_COMMISSION_RATE, DayData, WeekData, EmployeeProfile } from '@/lib/constants';
 import {
   parseLocalDate, formatLocalKey, getWeekKey, getDayDate, shiftWeek,
   formatDate, formatDateShort, getTodayDayIndex,
@@ -1149,19 +1149,26 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
       };
     });
 
-    // Tips bruts : répartis au prorata des heures travaillées sur les NON-EXTRAS uniquement
+    // Tips bruts : commission prélevée, puis répartis au prorata des heures
+    // des salariés ÉLIGIBLES (non-extras ET non exclus comme Adel).
     const tipsAmount = parseFloat(tipsBrut.replace(',', '.'));
     const hasTips = !isNaN(tipsAmount) && tipsAmount > 0;
-    const nonExtraTotalHours = cumuls
-      .filter(c => !c.isExtra)
+    // Montant net après commission de 0,96 %
+    const tipsNet = hasTips ? tipsAmount * (1 - TIPS_COMMISSION_RATE) : 0;
+    const isTipsEligible = (c: EmpCumul) => !c.isExtra && !EXCLUDED_FROM_TIPS.includes(c.name);
+    const eligibleTotalHours = cumuls
+      .filter(isTipsEligible)
       .reduce((s, c) => s + c.total, 0);
 
     if (hasTips) {
-      lines.push(`Tips brut sur la période : ${tipsAmount.toFixed(2)} € — réparti au prorata des heures des non-extras (${nonExtraTotalHours.toFixed(2)}h au total)`);
+      const commission = tipsAmount * TIPS_COMMISSION_RATE;
+      lines.push(`Tips brut sur la période : ${tipsAmount.toFixed(2)} €`);
+      lines.push(`Commission (${(TIPS_COMMISSION_RATE * 100).toFixed(2)} %) : -${commission.toFixed(2)} €`);
+      lines.push(`Tips net réparti : ${tipsNet.toFixed(2)} € — au prorata des heures des salariés éligibles (${eligibleTotalHours.toFixed(2)}h au total, hors extras et hors ${EXCLUDED_FROM_TIPS.join(', ')})`);
     }
     lines.push(
       hasTips
-        ? 'Salarié;Nom;Téléphone;Total heures;Heures normales;HS +10%;HS +20%;HS +50%;Total HS;Part tips brut (€)'
+        ? 'Salarié;Nom;Téléphone;Total heures;Heures normales;HS +10%;HS +20%;HS +50%;Total HS;Part tips net (€)'
         : 'Salarié;Nom;Téléphone;Total heures;Heures normales;HS +10%;HS +20%;HS +50%;Total HS'
     );
 
@@ -1170,10 +1177,10 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
       if (c.isExtra && !c.hasData) return;
 
       const totalHS = c.at10 + c.at20 + c.at50;
-      // Calcul de la part de tips : 0 si extra, sinon prorata des heures
+      // Calcul de la part de tips : 0 si non éligible, sinon prorata des heures sur le net
       let tipsPart = 0;
-      if (hasTips && !c.isExtra && nonExtraTotalHours > 0) {
-        tipsPart = (c.total / nonExtraTotalHours) * tipsAmount;
+      if (hasTips && isTipsEligible(c) && eligibleTotalHours > 0) {
+        tipsPart = (c.total / eligibleTotalHours) * tipsNet;
       }
 
       const row = [
@@ -1188,7 +1195,7 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
         totalHS.toFixed(2),
       ];
       if (hasTips) {
-        row.push(c.isExtra ? '0.00' : tipsPart.toFixed(2));
+        row.push(isTipsEligible(c) ? tipsPart.toFixed(2) : '0.00');
       }
       lines.push(row.join(';'));
     });
@@ -1501,7 +1508,7 @@ function AdminView({ employees, onEmployeesChange, onBack }: { employees: string
                 className="w-full mt-1 px-3 py-2 bg-white/10 text-white rounded-lg border border-white/20"
               />
               <p className="text-xs text-purple-400 mt-1">
-                Réparti au prorata des heures des non-extras.
+                Commission de 0,96 % déduite, puis réparti au prorata des heures (hors extras et hors {EXCLUDED_FROM_TIPS.join(', ')}).
               </p>
             </div>
             <div className="flex items-end md:col-span-3">

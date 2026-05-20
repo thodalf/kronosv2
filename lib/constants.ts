@@ -17,6 +17,12 @@ export const DEFAULT_PLANNING: Record<number, string[]> = {
 // (horaires particuliers, à pointer manuellement)
 export const EXCLUDED_FROM_GROUP_ACTIONS = ['Adel'];
 
+// Salariés exclus de la répartition des pourboires (en plus des extras)
+export const EXCLUDED_FROM_TIPS = ['Adel'];
+
+// Commission prélevée sur les tips bruts avant répartition (0,96 %)
+export const TIPS_COMMISSION_RATE = 0.0096;
+
 export interface EmployeeProfile {
   name: string;              // prénom (identifiant)
   last_name: string | null;
